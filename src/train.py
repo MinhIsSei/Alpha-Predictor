@@ -246,7 +246,7 @@ artifact = {
     ),
 }
 
-model_path = model_dir / "aapl_logistic_v1.joblib"
+model_path = model_dir / "aapl_logistic_v2.joblib"
 joblib.dump(artifact, model_path)
 
 print("Saved model:", model_path)

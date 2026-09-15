@@ -1,0 +1,83 @@
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 33b2f1a..ffd8a0b 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -41,7 +41,7 @@[m [mdata/[m
+     └── predictions.sqlite[m
+ [m
+ models/[m
+[31m-└── aapl_logistic_v1.joblib[m
+[32m+[m[32m└── aapl_logistic_v2.joblib[m
+ [m
+ requirements.txt[m
+ .gitignore[m
+[36m@@ -156,9 +156,14 @@[m [mpython src/train.py[m
+ Model output:[m
+ [m
+ ```text[m
+[31m-models/aapl_logistic_v1.joblib[m
+[32m+[m[32mmodels/aapl_logistic_v2.joblib[m
+ ```[m
+ [m
+[32m+[m[32mThe artifact filename and `model_version` string were bumped from `v1` to[m
+[32m+[m[32m`v2` when the feature set was expanded from 3–4 candle-shape features to the[m
+[32m+[m[32mfull 11-feature set (technical indicators, volatility, relative volume) —[m
+[32m+[m[32mper the coordination rule that a feature-set change requires a version bump.[m
+[32m+[m
+ The training script uses chronological session splits:[m
+ [m
+ - Earlier sessions: training[m
+[36m@@ -188,11 +193,16 @@[m [mTo reproduce the demonstrated replay, obtain the matching original artifacts fro[m
+ [m
+ ```text[m
+ data/raw/stock-trend_1mo.parquet[m
+[31m-models/aapl_logistic_v1.joblib[m
+[32m+[m[32mmodels/aapl_logistic_v2.joblib[m
+ ```[m
+ [m
+ Only load trusted model artifacts.[m
+ [m
+[32m+[m[32m**Historical note:** the demonstrated output below was captured against the[m
+[32m+[m[32moriginal `v1` artifact (3 features), before the feature set and model[m
+[32m+[m[32mversion were bumped to `v2`. A replay against a freshly trained `v2` model[m
+[32m+[m[32mwill not reproduce these exact figures.[m
+[32m+[m
+ Run:[m
+ [m
+ ```bash[m
+[1mdiff --git a/src/predict.py b/src/predict.py[m
+[1mindex f35799b..05fe235 100644[m
+[1m--- a/src/predict.py[m
+[1m+++ b/src/predict.py[m
+[36m@@ -35,7 +35,7 @@[m [mproject_root = Path(__file__).resolve().parent.parent[m
+ [m
+ # 1. Load the model and feature list[m
+ artifact = joblib.load([m
+[31m-    project_root / "models" / "aapl_logistic_v1.joblib"[m
+[32m+[m[32m    project_root / "models" / "aapl_logistic_v2.joblib"[m
+ )[m
+ [m
+ model = artifact["pipeline"][m
+[36m@@ -172,7 +172,7 @@[m [mprediction_dir.mkdir(parents=True, exist_ok=True)[m
+ db_path = prediction_dir / "predictions.sqlite"[m
+ [m
+ # This identifier must change whenever a new model is released.[m
+[31m-model_version = "aapl_logistic_v1"[m
+[32m+[m[32mmodel_version = "aapl_logistic_v2"[m
+ [m
+ # Store timestamps consistently in UTC.[m
+ candle_start_utc = candle_start.tz_convert("UTC").isoformat()[m
+[1mdiff --git a/src/train.py b/src/train.py[m
+[1mindex e528cc0..cb88499 100644[m
+[1m--- a/src/train.py[m
+[1m+++ b/src/train.py[m
+[36m@@ -246,7 +246,7 @@[m [martifact = {[m
+     ),[m
+ }[m
+ [m
+[31m-model_path = model_dir / "aapl_logistic_v1.joblib"[m
+[32m+[m[32mmodel_path = model_dir / "aapl_logistic_v2.joblib"[m
+ joblib.dump(artifact, model_path)[m
+ [m
+ print("Saved model:", model_path)[m
+\ No newline at end of file[m

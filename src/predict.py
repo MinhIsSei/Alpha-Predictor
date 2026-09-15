@@ -35,7 +35,7 @@ project_root = Path(__file__).resolve().parent.parent
 
 # 1. Load the model and feature list
 artifact = joblib.load(
-    project_root / "models" / "aapl_logistic_v1.joblib"
+    project_root / "models" / "aapl_logistic_v2.joblib"
 )
 
 model = artifact["pipeline"]
@@ -172,7 +172,7 @@ prediction_dir.mkdir(parents=True, exist_ok=True)
 db_path = prediction_dir / "predictions.sqlite"
 
 # This identifier must change whenever a new model is released.
-model_version = "aapl_logistic_v1"
+model_version = "aapl_logistic_v2"
 
 # Store timestamps consistently in UTC.
 candle_start_utc = candle_start.tz_convert("UTC").isoformat()

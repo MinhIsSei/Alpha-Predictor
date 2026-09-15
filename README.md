@@ -41,7 +41,7 @@ data/
     └── predictions.sqlite
 
 models/
-└── aapl_logistic_v1.joblib
+└── aapl_logistic_v2.joblib
 
 requirements.txt
 .gitignore
@@ -156,8 +156,13 @@ python src/train.py
 Model output:
 
 ```text
-models/aapl_logistic_v1.joblib
+models/aapl_logistic_v2.joblib
 ```
+
+The artifact filename and `model_version` string were bumped from `v1` to
+`v2` when the feature set was expanded from 3–4 candle-shape features to the
+full 11-feature set (technical indicators, volatility, relative volume) —
+per the coordination rule that a feature-set change requires a version bump.
 
 The training script uses chronological session splits:
 
@@ -188,10 +193,15 @@ To reproduce the demonstrated replay, obtain the matching original artifacts fro
 
 ```text
 data/raw/stock-trend_1mo.parquet
-models/aapl_logistic_v1.joblib
+models/aapl_logistic_v2.joblib
 ```
 
 Only load trusted model artifacts.
+
+**Historical note:** the demonstrated output below was captured against the
+original `v1` artifact (3 features), before the feature set and model
+version were bumped to `v2`. A replay against a freshly trained `v2` model
+will not reproduce these exact figures.
 
 Run:
 
