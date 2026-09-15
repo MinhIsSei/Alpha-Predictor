@@ -4,7 +4,7 @@ A Python project for predicting whether AAPL's closing price will increase over 
 
 This version includes data ingestion, feature engineering, chronological model evaluation, historical replay, live-data prediction, and SQLite storage for predictions and outcomes.
 
-**Current status:** historical replay has been verified. A complete live prediction-to-outcome cycle during market hours remains unverified. The model has not outperformed the baseline on the evaluated test set.
+**Current status:** historical replay and a complete live prediction-to-outcome cycle have both been verified. The model has not outperformed the baseline on the evaluated test set.
 
 ## Prediction Task
 
@@ -426,17 +426,16 @@ Added since the initial pipeline-v1 build:
 - Repeating live schedule with a graceful stop (`run_live_loop.py`).
 - Prediction audit trail: the OHLCV of the candle each prediction used is stored alongside it.
 - Model version bump (`v1` → `v2`) when the feature set changed.
+- **A complete live prediction-to-outcome cycle**, run with `run_live_loop.py` during NASDAQ market hours on 2026-09-15: multiple live predictions were saved, `evaluate_predictions.py --mode live` correctly waited for each 30-minute target to mature ("Waiting for target close: N") before saving an outcome, and both a correct and an incorrect prediction were recorded (e.g. candle `15:30:00+00:00`: predicted Up, actual Up, correct; candle `15:25:00+00:00`: predicted Up, actual Not up, incorrect). `Ctrl+C` was also verified to stop the loop gracefully, finishing the in-flight cycle first.
 
 Not yet fully verified:
 
-- A complete live prediction-to-outcome cycle during market hours (outside-hours rejection was verified; the full cycle still needs to run while NASDAQ is open).
 - Fresh ingestion-to-training reproduction on another machine.
 - Runtime behavior on early-close dates.
 - Recovery during sustained source failures.
 
 ## Remaining Work
 
-- Complete in-session live verification (run `run_live_loop.py` during market hours and confirm an outcome is saved).
 - Add an automated regression test suite (current verification is manual).
 - Improve artifact versioning and remove date-specific experiment assumptions.
 - Build a read-only dashboard (a demo database is ready at `data/demo/predictions_demo.sqlite`).
