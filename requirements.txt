@@ -1,0 +1,10 @@
+pandas==2.3.3
+numpy==2.3.5
+pyarrow==21.0.0
+yfinance==1.7.0
+scikit-learn==1.7.2
+joblib==1.5.2
+pandas-market-calendars==5.4.0
+matplotlib==3.10.6
+seaborn==0.13.2
+ipykernel==6.31.0
