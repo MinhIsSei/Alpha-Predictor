@@ -276,7 +276,15 @@ Skipped: raw price data failed quality checks: [...]
 Skipped: evaluation time is outside trading hours.
 Skipped: latest completed candle is stale.
 Skipped: insufficient time remaining in session.
+Skipped: latest candle is missing required features: [...]
 ```
+
+The last one is expected for roughly the first 100 minutes of every session:
+`volume_relative` needs 20 same-day 5-minute bars (`min_periods=20`) before
+it has a value, so live predictions only start succeeding after about
+11:10 ET. This is a feature-design limitation, not a bug — shortening it
+would mean changing how `volume_relative` is computed (e.g. falling back to
+a prior-day average early in the session).
 
 `predict.py` also stores the OHLCV of the candle each prediction was based
 on (`reference_open/high/low/close/volume` in the `predictions` table — see

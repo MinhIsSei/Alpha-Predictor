@@ -196,7 +196,16 @@ if data_age > max_data_age:
 X_latest = prices[feature_cols].tail(1)
 
 if X_latest.isna().any().any():
-    raise ValueError("The latest candle has missing features.")
+    # Most commonly this is volume_relative or one of the rolling/indicator
+    # features still warming up early in the session (e.g. volume_relative
+    # needs 20 same-day bars, ~100 minutes after the open) -- not an error,
+    # just too early in the day for this candle to have every feature yet.
+    missing_cols = X_latest.columns[X_latest.isna().any()].tolist()
+    logger.info(
+        "Skipped: latest candle is missing required features: %s.",
+        missing_cols,
+    )
+    raise SystemExit(0)
 
 prediction = int(model.predict(X_latest)[0])
 
