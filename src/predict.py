@@ -7,6 +7,10 @@ import yfinance as yf
 import sqlite3
 
 from feature_utils import build_features
+from logging_config import configure_logging
+from net_utils import with_retries
+
+logger = configure_logging("predict")
 
 parser = argparse.ArgumentParser(
     description="Run predictions in live or historical replay mode."
@@ -32,6 +36,35 @@ if args.mode == "live" and args.as_of is not None:
     parser.error("--as-of is only supported in replay mode.")
 
 project_root = Path(__file__).resolve().parent.parent
+
+
+def validate_price_quality(prices: pd.DataFrame) -> list[str]:
+    """Return a list of data-quality problems found in raw OHLCV rows.
+
+    Mirrors the checks notebooks/exploration.ipynb runs manually on the raw
+    snapshot, so predict.py never feeds obviously broken candles (e.g. a
+    High below Low from a bad tick) into the model.
+    """
+    issues = []
+
+    price_cols = ["Open", "High", "Low", "Close"]
+    if (prices[price_cols] <= 0).any().any():
+        issues.append("non-positive Open/High/Low/Close value")
+
+    if (prices["High"] < prices["Low"]).any():
+        issues.append("High below Low on at least one candle")
+
+    if (prices["Close"] > prices["High"]).any() or (prices["Close"] < prices["Low"]).any():
+        issues.append("Close outside [Low, High] on at least one candle")
+
+    if (prices["Open"] > prices["High"]).any() or (prices["Open"] < prices["Low"]).any():
+        issues.append("Open outside [Low, High] on at least one candle")
+
+    if (prices["Volume"] < 0).any():
+        issues.append("negative Volume")
+
+    return issues
+
 
 # 1. Load the model and feature list
 artifact = joblib.load(
@@ -62,25 +95,33 @@ if args.mode == "replay":
 
 else:
     # Fetch recent candles without overwriting the training snapshot.
-    prices = yf.Ticker(ticker).history(
-        period="5d",
-        interval=artifact["interval"],
-        auto_adjust=True,
-        prepost=False,
-    ).sort_index()
+    prices = with_retries(
+        lambda: yf.Ticker(ticker).history(
+            period="5d",
+            interval=artifact["interval"],
+            auto_adjust=True,
+            prepost=False,
+        ).sort_index(),
+        description=f"yfinance history fetch for {ticker}",
+    )
 
     # Capture the evaluation time after the download completes.
     now = pd.Timestamp.now(tz="America/New_York")
 
 if prices.empty:
-    print("Skipped: no price data is available.")
+    logger.info("Skipped: no price data is available.")
     raise SystemExit(0)
 
 if prices.index.tz is None:
     raise ValueError("Price timestamps must include a timezone.")
 
-print("Mode:", args.mode)
-print("Evaluation time:", now)
+logger.info("Mode: %s", args.mode)
+logger.info("Evaluation time: %s", now)
+
+quality_issues = validate_price_quality(prices)
+if quality_issues:
+    logger.warning("Skipped: raw price data failed quality checks: %s", quality_issues)
+    raise SystemExit(0)
 
 prices = prices[
     prices.index + pd.Timedelta(minutes=5) <= now
@@ -113,7 +154,7 @@ schedule = calendar.schedule(
 )
 
 if schedule.empty:
-    print("Skipped: no trading session on this date.")
+    logger.info("Skipped: no trading session on this date.")
     raise SystemExit(0)
 
 session_open = schedule.iloc[0]["market_open"]
@@ -121,33 +162,34 @@ session_close = schedule.iloc[0]["market_close"]
 
 # Check trading hours before checking the latest candle.
 if not (session_open <= evaluation_time < session_close):
-    print("Skipped: evaluation time is outside trading hours.")
+    logger.info("Skipped: evaluation time is outside trading hours.")
     raise SystemExit(0)
 
 # Ensure the latest candle belongs to the current session (not a leftover
 # candle from the previous session or outside trading hours).
 if candle_start < session_open or candle_end > session_close:
-    print("Skipped: latest candle is outside this session.")
+    logger.info("Skipped: latest candle is outside this session.")
     raise SystemExit(0)
 
 if prediction_end > session_close:
-    print("Skipped: insufficient time remaining in session.")
-    print("Prediction end:", prediction_end)
-    print("Session close:", session_close)
+    logger.info(
+        "Skipped: insufficient time remaining in session (prediction_end=%s, session_close=%s).",
+        prediction_end, session_close,
+    )
     raise SystemExit(0)
 
-print("Session open:", session_open)
-print("Session close:", session_close)
+logger.info("Session open: %s", session_open)
+logger.info("Session close: %s", session_close)
 
 # Time elapsed from the close of the last candle to the evaluation time
 data_age = evaluation_time - candle_end
 max_data_age = pd.Timedelta(minutes=5)
 
 if data_age > max_data_age:
-    print("Skipped: latest completed candle is stale.")
-    print("Latest candle end:", candle_end)
-    print("Evaluation time:", evaluation_time)
-    print("Data age:", data_age)
+    logger.info(
+        "Skipped: latest completed candle is stale (candle_end=%s, evaluation_time=%s, age=%s).",
+        candle_end, evaluation_time, data_age,
+    )
     raise SystemExit(0)
 
 # Predict only if the check is passed
@@ -161,9 +203,9 @@ prediction = int(model.predict(X_latest)[0])
 up_index = list(model.classes_).index(1)
 probability_up = model.predict_proba(X_latest)[0, up_index]
 
-print("Candle start:", X_latest.index[0])
-print("Prediction:", "Up" if prediction == 1 else "Not up")
-print(f"Model probability of Up: {probability_up:.2%}")
+logger.info("Candle start: %s", X_latest.index[0])
+logger.info("Prediction: %s", "Up" if prediction == 1 else "Not up")
+logger.info("Model probability of Up: %.2f%%", probability_up * 100)
 
 # Store successful predictions in a local SQLite database.
 prediction_dir = project_root / "data" / "predictions"
@@ -180,6 +222,16 @@ candle_end_utc = candle_end.tz_convert("UTC").isoformat()
 evaluation_time_utc = evaluation_time.tz_convert("UTC").isoformat()
 prediction_end_utc = prediction_end.tz_convert("UTC").isoformat()
 
+# Raw OHLCV of the candle the prediction was based on, kept alongside the
+# prediction so it can be audited later without re-downloading from Yahoo
+# Finance (which may no longer have the same intraday history available).
+reference_row = prices.loc[X_latest.index[0]]
+reference_open = float(reference_row["Open"])
+reference_high = float(reference_row["High"])
+reference_low = float(reference_row["Low"])
+reference_close = float(reference_row["Close"])
+reference_volume = float(reference_row["Volume"])
+
 with sqlite3.connect(db_path) as connection:
     connection.execute("""
         CREATE TABLE IF NOT EXISTS predictions (
@@ -194,6 +246,11 @@ with sqlite3.connect(db_path) as connection:
             horizon_minutes INTEGER NOT NULL,
             predicted_class INTEGER NOT NULL,
             probability_up REAL NOT NULL,
+            reference_open REAL NOT NULL,
+            reference_high REAL NOT NULL,
+            reference_low REAL NOT NULL,
+            reference_close REAL NOT NULL,
+            reference_volume REAL NOT NULL,
             UNIQUE (
                 ticker,
                 interval,
@@ -217,9 +274,14 @@ with sqlite3.connect(db_path) as connection:
             model_version,
             horizon_minutes,
             predicted_class,
-            probability_up
+            probability_up,
+            reference_open,
+            reference_high,
+            reference_low,
+            reference_close,
+            reference_volume
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (
             ticker,
             interval,
@@ -240,15 +302,20 @@ with sqlite3.connect(db_path) as connection:
         int(artifact["horizon_minutes"]),
         prediction,
         float(probability_up),
+        reference_open,
+        reference_high,
+        reference_low,
+        reference_close,
+        reference_volume,
     ))
 
     if cursor.rowcount == 1:
-        print("Prediction saved:", db_path)
+        logger.info("Prediction saved: %s", db_path)
     else:
-        print("Prediction already exists; no duplicate was saved.")
+        logger.info("Prediction already exists; no duplicate was saved.")
 
     total = connection.execute(
         "SELECT COUNT(*) FROM predictions"
     ).fetchone()[0]
 
-    print("Total stored predictions:", total)
+    logger.info("Total stored predictions: %d", total)

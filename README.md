@@ -28,17 +28,26 @@ src/
 ├── feature_utils.py         # Shared feature calculations
 ├── features.py              # Build the training dataset and targets
 ├── train.py                 # Train, evaluate, and save the model
-├── predict.py               # Run replay/live predictions and store results
-└── evaluate_predictions.py  # Match predictions with observed outcomes
+├── predict.py                # Run replay/live predictions and store results
+├── evaluate_predictions.py  # Match predictions with observed outcomes
+├── run_live_loop.py         # Repeat predict.py/evaluate_predictions.py on a schedule
+├── logging_config.py        # Shared logging setup used by all scripts above
+└── net_utils.py              # Retry helper for Yahoo Finance calls
 
 notebooks/
-└── exploration.ipynb        # Exploratory data analysis
+├── exploration.ipynb        # Exploratory data analysis
+└── AI_Brain.ipynb           # Step-by-step walkthrough of the feature pipeline
+
+docs/
+└── schema.md                # SQLite schema reference for the predictions database
 
 data/
 ├── raw/
 ├── processed/
-└── predictions/
-    └── predictions.sqlite
+├── predictions/
+│   └── predictions.sqlite
+└── demo/
+    └── predictions_demo.sqlite  # Sample data, checked into Git, for dashboard work
 
 models/
 └── aapl_logistic_v2.joblib
@@ -48,14 +57,16 @@ requirements.txt
 README.md
 ```
 
-Data, model artifacts, and SQLite databases are generated locally and are not included in Git.
+Data, model artifacts, and SQLite databases are generated locally and are not included in Git,
+**except** `data/demo/`, which holds a small checked-in sample so the dashboard can be built
+and tested without running the full pipeline first (see [`docs/schema.md`](docs/schema.md)).
 
 ## Setup
 
 Clone this branch:
 
 ```bash
-git clone --branch pipeline-v1 https://github.com/MinhIsSei/Alpha-Predictor.git
+git clone https://github.com/MinhIsSei/Alpha-Predictor.git
 cd Alpha-Predictor
 ```
 
@@ -198,10 +209,11 @@ models/aapl_logistic_v2.joblib
 
 Only load trusted model artifacts.
 
-**Historical note:** the demonstrated output below was captured against the
-original `v1` artifact (3 features), before the feature set and model
-version were bumped to `v2`. A replay against a freshly trained `v2` model
-will not reproduce these exact figures.
+**Note:** the demonstrated output below is from the `v2` artifact (11
+features). A rolling one-month download will eventually age this replay
+date out of range, and any retrain will shift the model's exact
+probabilities — treat these figures as an example of the expected output
+shape, not a fixed target to reproduce.
 
 Run:
 
@@ -211,12 +223,12 @@ python src/predict.py --mode replay --as-of "2026-09-11 14:05:00"
 
 A timezone-naive `--as-of` value is interpreted as New York time. Observations whose candles close after that time are excluded.
 
-With the original artifacts, the demonstrated result is:
+With the `v2` artifact, the demonstrated result is:
 
 ```text
 Candle start: 2026-09-11 14:00:00-04:00
-Prediction: Not up
-Model probability of Up: 49.98%
+Prediction: Up
+Model probability of Up: 51.63%
 ```
 
 Evaluate stored replay predictions:
@@ -231,7 +243,7 @@ The demonstrated outcome was:
 Reference close: 333.3450
 Target close: 332.8150
 Actual: Not up
-Correct: True
+Correct: False
 ```
 
 This single example verifies the workflow, not predictive performance. A newly downloaded snapshot may not contain this replay date.
@@ -246,6 +258,8 @@ python src/predict.py --mode live
 
 Live mode fetches recent Yahoo Finance data and checks:
 
+- The raw OHLCV candles pass basic sanity checks (no non-positive prices, no
+  `High < Low`, `Open`/`Close` inside the `[Low, High]` range, no negative volume).
 - A trading session exists for the evaluation date.
 - The evaluation time is within regular trading hours.
 - The latest selected candle has closed and belongs to the session.
@@ -258,12 +272,40 @@ The NASDAQ calendar provides session opening and closing times, including schedu
 A skipped prediction can be expected behavior, for example:
 
 ```text
+Skipped: raw price data failed quality checks: [...]
 Skipped: evaluation time is outside trading hours.
 Skipped: latest completed candle is stale.
 Skipped: insufficient time remaining in session.
 ```
 
-Each invocation performs one attempt. Automatic scheduling is not yet implemented. “Live” does not guarantee exchange-level real-time data.
+`predict.py` also stores the OHLCV of the candle each prediction was based
+on (`reference_open/high/low/close/volume` in the `predictions` table — see
+[`docs/schema.md`](docs/schema.md)), so a prediction can be audited later
+without re-downloading from Yahoo Finance, which does not keep old intraday
+history indefinitely.
+
+Each invocation of `predict.py --mode live` performs one attempt. To repeat it automatically:
+
+```bash
+python src/run_live_loop.py
+```
+
+This runs `predict.py --mode live` then `evaluate_predictions.py --mode
+live` every 5 minutes (matching the candle interval), skipping cycles when
+the market is closed. Every run, from every script, is logged to stdout
+with a timestamp and level (`logging_config.py`); redirect to a file if you
+want persistent logs, e.g. `python src/run_live_loop.py >> logs/live.log 2>&1`.
+
+Stop it safely with Ctrl+C (or `kill <pid>` if run in the background): the
+current cycle finishes — so a prediction or outcome write is never left
+half-done — before the process exits.
+
+Network calls to Yahoo Finance (in `ingest.py`, `predict.py --mode live`,
+and `evaluate_predictions.py --mode live`) automatically retry up to 3 times
+with a delay before giving up, since these requests occasionally fail
+transiently.
+
+“Live” does not guarantee exchange-level real-time data.
 
 ## Evaluate Live Outcomes
 
@@ -285,15 +327,22 @@ If required candles are unavailable, the prediction remains pending. Old intrada
 
 ## SQLite Storage
 
+Full column-by-column schema, join example, and demo data pointer:
+[`docs/schema.md`](docs/schema.md).
+
 Database location:
 
 ```text
 data/predictions/predictions.sqlite
 ```
 
+A small checked-in sample with real replay data lives at
+`data/demo/predictions_demo.sqlite`, for dashboard work that shouldn't
+depend on running the pipeline first.
+
 ### `predictions`
 
-Stores the ticker, interval, candle timestamps, evaluation time, target end time, mode, model version, horizon, predicted class, and probability of Up.
+Stores the ticker, interval, candle timestamps, evaluation time, target end time, mode, model version, horizon, predicted class, probability of Up, and the OHLCV of the candle the prediction was based on (for audit).
 
 ### `prediction_outcomes`
 
@@ -361,21 +410,28 @@ Verified through manual checks:
 - Outside-hours and insufficient-session-time rejection.
 - Replay in the cloned repository using the original artifacts.
 
+Added since the initial pipeline-v1 build:
+
+- Raw-candle sanity checks (no non-positive prices, `High < Low`, out-of-range Open/Close, negative volume) before a prediction is attempted.
+- Retry with backoff on Yahoo Finance calls in `ingest.py`, `predict.py`, and `evaluate_predictions.py`.
+- Structured, timestamped logging across all pipeline scripts (`logging_config.py`).
+- Repeating live schedule with a graceful stop (`run_live_loop.py`).
+- Prediction audit trail: the OHLCV of the candle each prediction used is stored alongside it.
+- Model version bump (`v1` → `v2`) when the feature set changed.
+
 Not yet fully verified:
 
-- A complete live prediction-to-outcome cycle during market hours.
+- A complete live prediction-to-outcome cycle during market hours (outside-hours rejection was verified; the full cycle still needs to run while NASDAQ is open).
 - Fresh ingestion-to-training reproduction on another machine.
 - Runtime behavior on early-close dates.
 - Recovery during sustained source failures.
 
 ## Remaining Work
 
-- Complete in-session live verification.
-- Strengthen automated data-quality checks and regression tests.
-- Add retry handling, structured logs, and scheduling.
-- Preserve source data needed to audit predictions.
+- Complete in-session live verification (run `run_live_loop.py` during market hours and confirm an outcome is saved).
+- Add an automated regression test suite (current verification is manual).
 - Improve artifact versioning and remove date-specific experiment assumptions.
-- Build a read-only dashboard.
+- Build a read-only dashboard (a demo database is ready at `data/demo/predictions_demo.sqlite`).
 - Add portable environment packaging and a demo.
 
 ## Data Source

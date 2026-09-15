@@ -4,6 +4,12 @@ import pandas as pd
 import argparse
 import yfinance as yf
 
+from logging_config import configure_logging
+from net_utils import with_retries
+
+logger = configure_logging("evaluate_predictions")
+
+
 def save_outcome(db_path, row, reference_close, target_close,
                  actual_class, is_correct):
     """Save an outcome once without changing the original prediction."""
@@ -70,15 +76,15 @@ def save_outcome(db_path, row, reference_close, target_close,
         ))
 
         if cursor.rowcount == 1:
-            print("Outcome saved.")
+            logger.info("Outcome saved.")
         else:
-            print("Outcome already exists; no duplicate was saved.")
+            logger.info("Outcome already exists; no duplicate was saved.")
 
         total = connection.execute(
             "SELECT COUNT(*) FROM prediction_outcomes"
         ).fetchone()[0]
 
-        print("Total stored outcomes:", total)
+        logger.info("Total stored outcomes: %d", total)
 
 project_root = Path(__file__).resolve().parent.parent
 db_path = project_root / "data" / "predictions" / "predictions.sqlite"
@@ -127,11 +133,11 @@ with sqlite3.connect(db_path) as connection:
         query, connection, params=(args.mode,)
     )
 
-print("Mode:", args.mode)
-print("Predictions without outcomes:", len(predictions))
+logger.info("Mode: %s", args.mode)
+logger.info("Predictions without outcomes: %d", len(predictions))
 
 if predictions.empty:
-    print("Nothing to evaluate.")
+    logger.info("Nothing to evaluate.")
     raise SystemExit(0)
 
 # Use a fixed cutoff for this evaluation run.
@@ -143,11 +149,11 @@ if args.mode == "live":
     )
     matured = target_times <= evaluation_time
 
-    print("Waiting for target close:", int((~matured).sum()))
+    logger.info("Waiting for target close: %d", int((~matured).sum()))
     predictions = predictions.loc[matured].copy()
 
     if predictions.empty:
-        print("No predictions are ready for evaluation.")
+        logger.info("No predictions are ready for evaluation.")
         raise SystemExit(0)
 
 historical_prices = (
@@ -161,7 +167,7 @@ for (ticker, interval), group in predictions.groupby(
     ["ticker", "interval"]
 ):
     if interval != "5m":
-        print(f"Skipped {ticker}: unsupported candle interval.")
+        logger.warning("Skipped %s: unsupported candle interval.", ticker)
         continue
 
     if args.mode == "replay":
@@ -186,32 +192,35 @@ for (ticker, interval), group in predictions.groupby(
         ).date()
 
         try:
-            downloaded = yf.Ticker(ticker).history(
-                start=start_date.isoformat(),
-                end=end_date.isoformat(),
-                interval=interval,
-                auto_adjust=True,
-                prepost=False,
+            downloaded = with_retries(
+                lambda: yf.Ticker(ticker).history(
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    interval=interval,
+                    auto_adjust=True,
+                    prepost=False,
+                ),
+                description=f"yfinance history fetch for {ticker}",
             )
         except Exception as exc:
-            print(f"Pending {ticker}: download failed: {exc}")
+            logger.warning("Pending %s: download failed after retries: %s", ticker, exc)
             continue
 
         if downloaded.empty:
-            print(f"Pending {ticker}: no price data returned.")
+            logger.warning("Pending %s: no price data returned.", ticker)
             continue
 
         close = downloaded["Close"].copy()
 
     if close.index.tz is None:
-        print(f"Skipped {ticker}: timestamps have no timezone.")
+        logger.warning("Skipped %s: timestamps have no timezone.", ticker)
         continue
 
     close.index = close.index.tz_convert("UTC")
     close = close.sort_index()
 
     if close.index.has_duplicates:
-        print(f"Skipped {ticker}: duplicate price timestamps.")
+        logger.warning("Skipped %s: duplicate price timestamps.", ticker)
         continue
 
     if args.mode == "live":
@@ -236,7 +245,7 @@ for (ticker, interval), group in predictions.groupby(
         required_times = [candle_start, target_candle_start]
 
         if any(timestamp not in close.index for timestamp in required_times):
-            print(f"Pending {ticker} {candle_start}: required candle unavailable.")
+            logger.info("Pending %s %s: required candle unavailable.", ticker, candle_start)
             continue
 
         reference_close = close.loc[candle_start]
@@ -248,7 +257,7 @@ for (ticker, interval), group in predictions.groupby(
             or reference_close <= 0
             or target_close <= 0
         ):
-            print(f"Pending {ticker} {candle_start}: invalid or missing price.")
+            logger.warning("Pending %s %s: invalid or missing price.", ticker, candle_start)
             continue
 
         actual_class = int(target_close > reference_close)
@@ -264,10 +273,10 @@ for (ticker, interval), group in predictions.groupby(
             is_correct=is_correct,
         )
 
-        print("\nTicker:", ticker)
-        print("Candle start:", candle_start)
-        print(f"Reference close: {reference_close:.4f}")
-        print(f"Target close: {target_close:.4f}")
-        print("Predicted:", "Up" if predicted_class == 1 else "Not up")
-        print("Actual:", "Up" if actual_class == 1 else "Not up")
-        print("Correct:", is_correct)
+        logger.info("Ticker: %s", ticker)
+        logger.info("Candle start: %s", candle_start)
+        logger.info("Reference close: %.4f", reference_close)
+        logger.info("Target close: %.4f", target_close)
+        logger.info("Predicted: %s", "Up" if predicted_class == 1 else "Not up")
+        logger.info("Actual: %s", "Up" if actual_class == 1 else "Not up")
+        logger.info("Correct: %s", is_correct)
