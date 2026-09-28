@@ -60,9 +60,21 @@ def build_features(prices: pd.DataFrame) -> pd.DataFrame:
         (bb.bollinger_hband() - bb.bollinger_lband()) / result["Close"] * 100
     )
 
-    atr = ta.volatility.AverageTrueRange(
-        high=result["High"], low=result["Low"], close=result["Close"], window=14
-    )
-    result["atr_pct"] = atr.average_true_range() / result["Close"] * 100
+    # Leave ATR unavailable until enough historical candles exist.
+    atr_window = 14
+    result["atr_pct"] = float("nan")
+
+    if len(result) >= atr_window:
+        atr = ta.volatility.AverageTrueRange(
+            high=result["High"],
+            low=result["Low"],
+            close=result["Close"],
+            window=atr_window,
+        )
+        atr_values = atr.average_true_range()
+
+        # Mask the library's zero placeholders during the warm-up period.
+        atr_values.iloc[: atr_window - 1] = float("nan")
+        result["atr_pct"] = atr_values / result["Close"] * 100
 
     return result
