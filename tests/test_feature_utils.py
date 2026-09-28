@@ -36,6 +36,38 @@ class TestBuildFeatures(unittest.TestCase):
                     prices.columns.get_loc("Open")] = 99
 
         result = build_features(prices)
+        # First candle: Open = 99, High = 102, Low = 98, Close = 100.
+        self.assertAlmostEqual(
+            result["range_pct"].iloc[0],
+            (102 - 98) / 99 * 100,
+        )
+
+        self.assertAlmostEqual(
+            result["body_pct"].iloc[0],
+            (100 - 99) / 99 * 100,
+        )
+
+        # Close increases from 100 to 102 after 5 mins.
+        self.assertAlmostEqual(
+            result["return_5m_pct"].iloc[1],
+            (102 / 100 - 1) * 100,
+        )
+
+        # Close increases from 100 to 106 after 15 mins.
+        self.assertAlmostEqual(
+            result["return_15m_pct"].iloc[3],
+            (106 / 100 - 1) * 100,
+        )
+
+        # First candle does not have past price to calculate return 5 mins.
+        self.assertTrue(
+            pd.isna(result["return_5m_pct"].iloc[0])
+        )
+
+        # There are only 4 candles, therefore not enough history to calculate return 30 mins.
+        self.assertTrue(
+            result["return_30m_pct"].isna().all()
+        )
 
     def test_atr_is_missing_with_13_candles(self):
         """ATR must remain unavailable with fewer than 14 candles."""
