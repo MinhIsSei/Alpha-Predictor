@@ -11,3 +11,6 @@ models/
 *.sqlite-wal
 *.sqlite-shm
 .DS_Store
+# Local experiment archives and training logs
+/experiments/
+/reports/*.log
