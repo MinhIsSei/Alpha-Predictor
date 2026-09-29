@@ -1,19 +1,69 @@
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import pandas as pd
 import argparse
 import yfinance as yf
 
-from logging_config import configure_logging
-from net_utils import with_retries
+from src.logging_config import configure_logging
+from src.net_utils import with_retries
 
 logger = configure_logging("evaluate_predictions")
+
+project_root = Path(__file__).resolve().parent.parent
+db_path = project_root / "data" / "predictions" / "predictions.sqlite"
+price_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
+
+
+def compute_outcome(
+    reference_close: float, target_close: float, predicted_class: int
+) -> tuple[int, bool]:
+    """Return (actual_class, is_correct) for one matured prediction."""
+    actual_class = int(target_close > reference_close)
+    is_correct = predicted_class == actual_class
+    return actual_class, is_correct
+
+
+def prices_are_usable(reference_close, target_close) -> bool:
+    """Return whether both prices are present and positive enough to score."""
+    if pd.isna(reference_close) or pd.isna(target_close):
+        return False
+    return reference_close > 0 and target_close > 0
+
+
+def select_pending_predictions(connection: sqlite3.Connection, mode: str) -> pd.DataFrame:
+    """Return predictions of the given mode that don't have an outcome yet."""
+    outcomes_exists = connection.execute("""
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'prediction_outcomes'
+    """).fetchone()
+
+    if outcomes_exists:
+        query = """
+            SELECT p.*
+            FROM predictions AS p
+            WHERE p.mode = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM prediction_outcomes AS o
+                  WHERE o.ticker = p.ticker
+                    AND o.interval = p.interval
+                    AND o.candle_start = p.candle_start
+                    AND o.mode = p.mode
+                    AND o.model_version = p.model_version
+                    AND o.horizon_minutes = p.horizon_minutes
+              )
+        """
+    else:
+        query = "SELECT * FROM predictions WHERE mode = ?"
+
+    return pd.read_sql_query(query, connection, params=(mode,))
 
 
 def save_outcome(db_path, row, reference_close, target_close,
                  actual_class, is_correct):
     """Save an outcome once without changing the original prediction."""
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS prediction_outcomes (
                 ticker TEXT NOT NULL,
@@ -86,197 +136,165 @@ def save_outcome(db_path, row, reference_close, target_close,
 
         logger.info("Total stored outcomes: %d", total)
 
-project_root = Path(__file__).resolve().parent.parent
-db_path = project_root / "data" / "predictions" / "predictions.sqlite"
-price_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
 
-if not db_path.is_file():
-    raise FileNotFoundError("Prediction database does not exist.")
+def main() -> None:
+    if not db_path.is_file():
+        raise FileNotFoundError("Prediction database does not exist.")
 
-parser = argparse.ArgumentParser(
-    description="Evaluate pending replay or live predictions."
-)
-parser.add_argument(
-    "--mode",
-    choices=["replay", "live"],
-    default="replay",
-)
-args = parser.parse_args()
-
-# Select predictions that do not already have an outcome.
-with sqlite3.connect(db_path) as connection:
-    outcomes_exists = connection.execute("""
-        SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name = 'prediction_outcomes'
-    """).fetchone()
-
-    if outcomes_exists:
-        query = """
-            SELECT p.*
-            FROM predictions AS p
-            WHERE p.mode = ?
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM prediction_outcomes AS o
-                  WHERE o.ticker = p.ticker
-                    AND o.interval = p.interval
-                    AND o.candle_start = p.candle_start
-                    AND o.mode = p.mode
-                    AND o.model_version = p.model_version
-                    AND o.horizon_minutes = p.horizon_minutes
-              )
-        """
-    else:
-        query = "SELECT * FROM predictions WHERE mode = ?"
-
-    predictions = pd.read_sql_query(
-        query, connection, params=(args.mode,)
+    parser = argparse.ArgumentParser(
+        description="Evaluate pending replay or live predictions."
     )
+    parser.add_argument("--mode", choices=["replay", "live"], default="replay")
+    args = parser.parse_args()
 
-logger.info("Mode: %s", args.mode)
-logger.info("Predictions without outcomes: %d", len(predictions))
+    # Select predictions that do not already have an outcome.
+    with closing(sqlite3.connect(db_path)) as connection:
+        predictions = select_pending_predictions(connection, args.mode)
 
-if predictions.empty:
-    logger.info("Nothing to evaluate.")
-    raise SystemExit(0)
-
-# Use a fixed cutoff for this evaluation run.
-evaluation_time = pd.Timestamp.now(tz="UTC")
-
-if args.mode == "live":
-    target_times = pd.to_datetime(
-        predictions["prediction_end"], utc=True
-    )
-    matured = target_times <= evaluation_time
-
-    logger.info("Waiting for target close: %d", int((~matured).sum()))
-    predictions = predictions.loc[matured].copy()
+    logger.info("Mode: %s", args.mode)
+    logger.info("Predictions without outcomes: %d", len(predictions))
 
     if predictions.empty:
-        logger.info("No predictions are ready for evaluation.")
+        logger.info("Nothing to evaluate.")
         raise SystemExit(0)
 
-historical_prices = (
-    pd.read_parquet(price_path)
-    if args.mode == "replay"
-    else None
-)
-
-# Download once per ticker and interval, not once per prediction.
-for (ticker, interval), group in predictions.groupby(
-    ["ticker", "interval"]
-):
-    if interval != "5m":
-        logger.warning("Skipped %s: unsupported candle interval.", ticker)
-        continue
-
-    if args.mode == "replay":
-        close = historical_prices[("Close", ticker)].copy()
-
-    else:
-        # Request the dates needed by pending predictions.
-        first_time = pd.to_datetime(
-            group["candle_start"], utc=True
-        ).min()
-        last_time = pd.to_datetime(
-            group["prediction_end"], utc=True
-        ).max()
-
-        start_date = first_time.tz_convert(
-            "America/New_York"
-        ).date()
-
-        end_date = (
-            last_time.tz_convert("America/New_York").normalize()
-            + pd.Timedelta(days=1)
-        ).date()
-
-        try:
-            downloaded = with_retries(
-                lambda: yf.Ticker(ticker).history(
-                    start=start_date.isoformat(),
-                    end=end_date.isoformat(),
-                    interval=interval,
-                    auto_adjust=True,
-                    prepost=False,
-                ),
-                description=f"yfinance history fetch for {ticker}",
-            )
-        except Exception as exc:
-            logger.warning("Pending %s: download failed after retries: %s", ticker, exc)
-            continue
-
-        if downloaded.empty:
-            logger.warning("Pending %s: no price data returned.", ticker)
-            continue
-
-        close = downloaded["Close"].copy()
-
-    if close.index.tz is None:
-        logger.warning("Skipped %s: timestamps have no timezone.", ticker)
-        continue
-
-    close.index = close.index.tz_convert("UTC")
-    close = close.sort_index()
-
-    if close.index.has_duplicates:
-        logger.warning("Skipped %s: duplicate price timestamps.", ticker)
-        continue
+    # Use a fixed cutoff for this evaluation run.
+    evaluation_time = pd.Timestamp.now(tz="UTC")
 
     if args.mode == "live":
-        # Exclude candles that had not closed at the evaluation cutoff.
-        close = close[
-            close.index + pd.Timedelta(minutes=5) <= evaluation_time
-        ]
-
-    for _, row in group.iterrows():
-        candle_start = pd.to_datetime(
-            row["candle_start"], utc=True
+        target_times = pd.to_datetime(
+            predictions["prediction_end"], utc=True
         )
-        prediction_end = pd.to_datetime(
-            row["prediction_end"], utc=True
-        )
+        matured = target_times <= evaluation_time
 
-        # The target price belongs to the candle ending at prediction_end.
-        target_candle_start = (
-            prediction_end - pd.Timedelta(minutes=5)
-        )
+        logger.info("Waiting for target close: %d", int((~matured).sum()))
+        predictions = predictions.loc[matured].copy()
 
-        required_times = [candle_start, target_candle_start]
+        if predictions.empty:
+            logger.info("No predictions are ready for evaluation.")
+            raise SystemExit(0)
 
-        if any(timestamp not in close.index for timestamp in required_times):
-            logger.info("Pending %s %s: required candle unavailable.", ticker, candle_start)
+    historical_prices = (
+        pd.read_parquet(price_path)
+        if args.mode == "replay"
+        else None
+    )
+
+    # Download once per ticker and interval, not once per prediction.
+    for (ticker, interval), group in predictions.groupby(
+        ["ticker", "interval"]
+    ):
+        if interval != "5m":
+            logger.warning("Skipped %s: unsupported candle interval.", ticker)
             continue
 
-        reference_close = close.loc[candle_start]
-        target_close = close.loc[target_candle_start]
+        if args.mode == "replay":
+            close = historical_prices[("Close", ticker)].copy()
 
-        if (
-            pd.isna(reference_close)
-            or pd.isna(target_close)
-            or reference_close <= 0
-            or target_close <= 0
-        ):
-            logger.warning("Pending %s %s: invalid or missing price.", ticker, candle_start)
+        else:
+            # Request the dates needed by pending predictions.
+            first_time = pd.to_datetime(
+                group["candle_start"], utc=True
+            ).min()
+            last_time = pd.to_datetime(
+                group["prediction_end"], utc=True
+            ).max()
+
+            start_date = first_time.tz_convert(
+                "America/New_York"
+            ).date()
+
+            end_date = (
+                last_time.tz_convert("America/New_York").normalize()
+                + pd.Timedelta(days=1)
+            ).date()
+
+            try:
+                downloaded = with_retries(
+                    lambda: yf.Ticker(ticker).history(
+                        start=start_date.isoformat(),
+                        end=end_date.isoformat(),
+                        interval=interval,
+                        auto_adjust=True,
+                        prepost=False,
+                    ),
+                    description=f"yfinance history fetch for {ticker}",
+                )
+            except Exception as exc:
+                logger.warning("Pending %s: download failed after retries: %s", ticker, exc)
+                continue
+
+            if downloaded.empty:
+                logger.warning("Pending %s: no price data returned.", ticker)
+                continue
+
+            close = downloaded["Close"].copy()
+
+        if close.index.tz is None:
+            logger.warning("Skipped %s: timestamps have no timezone.", ticker)
             continue
 
-        actual_class = int(target_close > reference_close)
-        predicted_class = int(row["predicted_class"])
-        is_correct = predicted_class == actual_class
+        close.index = close.index.tz_convert("UTC")
+        close = close.sort_index()
 
-        save_outcome(
-            db_path=db_path,
-            row=row,
-            reference_close=reference_close,
-            target_close=target_close,
-            actual_class=actual_class,
-            is_correct=is_correct,
-        )
+        if close.index.has_duplicates:
+            logger.warning("Skipped %s: duplicate price timestamps.", ticker)
+            continue
 
-        logger.info("Ticker: %s", ticker)
-        logger.info("Candle start: %s", candle_start)
-        logger.info("Reference close: %.4f", reference_close)
-        logger.info("Target close: %.4f", target_close)
-        logger.info("Predicted: %s", "Up" if predicted_class == 1 else "Not up")
-        logger.info("Actual: %s", "Up" if actual_class == 1 else "Not up")
-        logger.info("Correct: %s", is_correct)
+        if args.mode == "live":
+            # Exclude candles that had not closed at the evaluation cutoff.
+            close = close[
+                close.index + pd.Timedelta(minutes=5) <= evaluation_time
+            ]
+
+        for _, row in group.iterrows():
+            candle_start = pd.to_datetime(
+                row["candle_start"], utc=True
+            )
+            prediction_end = pd.to_datetime(
+                row["prediction_end"], utc=True
+            )
+
+            # The target price belongs to the candle ending at prediction_end.
+            target_candle_start = (
+                prediction_end - pd.Timedelta(minutes=5)
+            )
+
+            required_times = [candle_start, target_candle_start]
+
+            if any(timestamp not in close.index for timestamp in required_times):
+                logger.info("Pending %s %s: required candle unavailable.", ticker, candle_start)
+                continue
+
+            reference_close = close.loc[candle_start]
+            target_close = close.loc[target_candle_start]
+
+            if not prices_are_usable(reference_close, target_close):
+                logger.warning("Pending %s %s: invalid or missing price.", ticker, candle_start)
+                continue
+
+            predicted_class = int(row["predicted_class"])
+            actual_class, is_correct = compute_outcome(
+                reference_close, target_close, predicted_class
+            )
+
+            save_outcome(
+                db_path=db_path,
+                row=row,
+                reference_close=reference_close,
+                target_close=target_close,
+                actual_class=actual_class,
+                is_correct=is_correct,
+            )
+
+            logger.info("Ticker: %s", ticker)
+            logger.info("Candle start: %s", candle_start)
+            logger.info("Reference close: %.4f", reference_close)
+            logger.info("Target close: %.4f", target_close)
+            logger.info("Predicted: %s", "Up" if predicted_class == 1 else "Not up")
+            logger.info("Actual: %s", "Up" if actual_class == 1 else "Not up")
+            logger.info("Correct: %s", is_correct)
+
+
+if __name__ == "__main__":
+    main()

@@ -26,6 +26,8 @@ The probability reported by the model is not its accuracy.
 src/
 ├── ingest.py                # Download and save historical OHLCV data
 ├── feature_utils.py         # Shared feature calculations
+├── target_utils.py          # Shared same-session future-return target calculation
+├── data_quality.py          # Shared raw-OHLCV quality checks
 ├── features.py              # Build the training dataset and targets
 ├── train.py                 # Train, evaluate, and save the model
 ├── predict.py                # Run replay/live predictions and store results
@@ -93,7 +95,11 @@ python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-Run all following commands from the repository root.
+Run all following commands from the repository root, using `python -m src.<module>`
+rather than `python src/<module>.py`. The `-m` form puts the repository root
+on the import path, which every script under `src/` needs since they import
+each other with absolute imports (e.g. `from src.feature_utils import
+build_features`) — the same style the test suite uses.
 
 Dependencies were installed and replay was verified in a fresh virtual environment on the developer's Mac. Other platforms have not yet been verified.
 
@@ -137,7 +143,7 @@ Targets and future prices are never included in model inputs.
 Download data:
 
 ```bash
-python src/ingest.py
+python -m src.ingest
 ```
 
 Output:
@@ -149,7 +155,7 @@ data/raw/stock-trend_1mo.parquet
 Build features and targets:
 
 ```bash
-python src/features.py
+python -m src.features
 ```
 
 Output:
@@ -161,7 +167,7 @@ data/processed/aapl_training_1mo.parquet
 Train and evaluate:
 
 ```bash
-python src/train.py
+python -m src.train
 ```
 
 Model output:
@@ -218,7 +224,7 @@ shape, not a fixed target to reproduce.
 Run:
 
 ```bash
-python src/predict.py --mode replay --as-of "2026-09-11 14:05:00"
+python -m src.predict --mode replay --as-of "2026-09-11 14:05:00"
 ```
 
 A timezone-naive `--as-of` value is interpreted as New York time. Observations whose candles close after that time are excluded.
@@ -234,7 +240,7 @@ Model probability of Up: 51.63%
 Evaluate stored replay predictions:
 
 ```bash
-python src/evaluate_predictions.py --mode replay
+python -m src.evaluate_predictions --mode replay
 ```
 
 The demonstrated outcome was:
@@ -253,7 +259,7 @@ This single example verifies the workflow, not predictive performance. A newly d
 Run one prediction attempt:
 
 ```bash
-python src/predict.py --mode live
+python -m src.predict --mode live
 ```
 
 Live mode fetches recent Yahoo Finance data and checks:
@@ -295,14 +301,14 @@ history indefinitely.
 Each invocation of `predict.py --mode live` performs one attempt. To repeat it automatically:
 
 ```bash
-python src/run_live_loop.py
+python -m src.run_live_loop
 ```
 
 This runs `predict.py --mode live` then `evaluate_predictions.py --mode
 live` every 5 minutes (matching the candle interval), skipping cycles when
 the market is closed. Every run, from every script, is logged to stdout
 with a timestamp and level (`logging_config.py`); redirect to a file if you
-want persistent logs, e.g. `python src/run_live_loop.py >> logs/live.log 2>&1`.
+want persistent logs, e.g. `python -m src.run_live_loop >> logs/live.log 2>&1`.
 
 Stop it safely with Ctrl+C (or `kill <pid>` if run in the background): the
 current cycle finishes — so a prediction or outcome write is never left
@@ -320,7 +326,7 @@ transiently.
 Run:
 
 ```bash
-python src/evaluate_predictions.py --mode live
+python -m src.evaluate_predictions --mode live
 ```
 
 The evaluator:
@@ -406,6 +412,50 @@ Adding the 15-minute return produced 48.19% validation accuracy on the same reta
 
 The test period had previously appeared in EDA. Further evaluation on unseen future sessions is needed. Overlapping 30-minute targets also mean adjacent examples are not independent.
 
+## Time-Series and Cross-Stock Evaluation
+
+A single train/validation/test split (Workflow A) gives one point-in-time
+accuracy estimate, evaluated on as few as four sessions. Two additional
+scripts give a more complete picture of how stable that estimate is.
+
+### Walk-forward evaluation
+
+```bash
+python -m src.evaluate_walk_forward
+```
+
+Rolls a fixed-size training window (10 sessions by default) forward through
+the whole processed AAPL table, testing on the following 2 sessions at each
+step (`--train-sessions` / `--test-sessions` to change this). Each fold fits
+its own baseline and model — a training row is dropped if its own target
+resolves into the test window, so no fold leaks a future label. This reuses
+`feature_utils`/`target_utils`, not `train.py`'s saved artifact: it evaluates
+the *method*, not the deployed model.
+
+On the current snapshot (20 sessions, 5 folds of 10-train/2-test), the model
+beat the baseline in only 3 of 5 folds — mean accuracy 51.51% (±4.65 across
+folds) vs. a 48.49% baseline. **This is the more trustworthy read of this
+model's performance than the single-split figures above**: the improvement
+over baseline is smaller than the fold-to-fold variation, so it should not
+be treated as an established edge.
+
+### Cross-stock evaluation
+
+```bash
+python -m src.evaluate_cross_stock
+```
+
+`ingest.py` downloads five tickers, but training only ever used AAPL. This
+script builds the same features and target for the other four
+(MSFT, NVDA, GOOGL, AMZN) and scores the AAPL-trained pipeline against a
+same-ticker baseline. None of these tickers were in training, so no
+train/test split is needed per ticker — the whole built dataset is
+out-of-sample.
+
+On the current snapshot, the AAPL model beat the same-ticker baseline on
+only 2 of 4 other tickers — evidence it has not learned a pattern that
+generalizes across symbols, consistent with the walk-forward result above.
+
 ## Verification Status
 
 Verified through manual checks:
@@ -427,6 +477,9 @@ Added since the initial pipeline-v1 build:
 - Prediction audit trail: the OHLCV of the candle each prediction used is stored alongside it.
 - Model version bump (`v1` → `v2`) when the feature set changed.
 - **A complete live prediction-to-outcome cycle**, run with `run_live_loop.py` during NASDAQ market hours on 2026-09-15: multiple live predictions were saved, `evaluate_predictions.py --mode live` correctly waited for each 30-minute target to mature ("Waiting for target close: N") before saving an outcome, and both a correct and an incorrect prediction were recorded (e.g. candle `15:30:00+00:00`: predicted Up, actual Up, correct; candle `15:25:00+00:00`: predicted Up, actual Not up, incorrect). `Ctrl+C` was also verified to stop the loop gracefully, finishing the in-flight cycle first.
+- **An automated test suite** (`tests/`, run via `python -m unittest discover -s tests` and in CI on every push/PR): covers `feature_utils`, `target_utils`, `data_quality`, `prediction_rules`, the pure logic extracted from `predict.py` and `evaluate_predictions.py` (session-timing checks, SQLite insert/dedup, outcome matching), and `evaluation`'s walk-forward split generation.
+- Shared raw-OHLCV quality checks (`data_quality.py`, including duplicate-timestamp and short-interval detection) now run in both `ingest.py` and `predict.py --mode live`, not live mode only.
+- Walk-forward and cross-stock evaluation (`evaluate_walk_forward.py`, `evaluate_cross_stock.py` — see above) for a more complete accuracy picture than a single split.
 
 Not yet fully verified:
 
@@ -436,10 +489,10 @@ Not yet fully verified:
 
 ## Remaining Work
 
-- Add an automated regression test suite (current verification is manual).
 - Improve artifact versioning and remove date-specific experiment assumptions.
 - Build a read-only dashboard (a demo database is ready at `data/demo/predictions_demo.sqlite`).
 - Add portable environment packaging and a demo.
+- Try a non-linear model (e.g. gradient boosting) and compare it using the same walk-forward evaluation, since the walk-forward and cross-stock results above suggest the current logistic model's edge over baseline is not robust.
 
 ## Data Source
 

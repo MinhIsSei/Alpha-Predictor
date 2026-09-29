@@ -1,7 +1,8 @@
 import pandas as pd
 from pathlib import Path
 
-from feature_utils import build_features
+from src.feature_utils import build_features
+from src.target_utils import build_target
 
 project_root = Path(__file__).resolve().parent.parent
 file_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
@@ -15,25 +16,8 @@ df_model = (
 )
 df_model = build_features(df_model)
 
-timestamps = df_model.index.to_series()
-
-future_close = df_model["Close"].shift(-6)
-future_time = timestamps.shift(-6)
-
-#Labels are accepted only 
-#if they are exactly 30 minutes old and from the same trading day
-valid_target = (
-    (future_time - timestamps).eq(pd.Timedelta(minutes=30))
-    & future_time.dt.normalize().eq(timestamps.dt.normalize())
-)
-
-df_model["future_close_30m"] = future_close.where(valid_target)
-
-df_model["target_up_30m"] = (
-    (future_close > df_model["Close"])
-    .astype("Int64")
-    .where(valid_target)
-)
+# Horizon is 30 minutes = 6 bars at the 5-minute candle interval.
+df_model = build_target(df_model, horizon_minutes=30, periods=6)
 
 feature_cols = [
     "range_pct",
@@ -50,9 +34,6 @@ feature_cols = [
 ]
 
 target_col = "target_up_30m"
-
-#The timing of futures prices for checking the train/test boundary
-df_model["target_time"] = future_time.where(valid_target)
 
 #Only keep items that have sufficient characteristics and labels
 training_data = df_model[

@@ -1,8 +1,9 @@
 from pathlib import Path
 import yfinance as yf
 
-from logging_config import configure_logging
-from net_utils import with_retries
+from src.data_quality import validate_price_quality
+from src.logging_config import configure_logging
+from src.net_utils import with_retries
 
 logger = configure_logging("ingest")
 
@@ -37,3 +38,14 @@ logger.info("Trading dates: %d", df.index.normalize().nunique())
 logger.info("From: %s", df.index.min())
 logger.info("To: %s", df.index.max())
 logger.info("Missing values by column:\n%s", df.isna().sum())
+
+# Quality-check each ticker's own OHLCV slice (not the whole multi-index
+# frame): a per-ticker duplicate timestamp or interval gap on one symbol
+# shouldn't be masked by another symbol's clean data in the same download.
+for ticker in tickers:
+    ticker_prices = df.xs(ticker, axis=1, level="Ticker").dropna(how="all")
+    issues = validate_price_quality(ticker_prices, expected_interval_minutes=5)
+    if issues:
+        logger.warning("%s: data quality issues found: %s", ticker, issues)
+    else:
+        logger.info("%s: no data quality issues found.", ticker)

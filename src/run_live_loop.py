@@ -16,12 +16,11 @@ from pathlib import Path
 import pandas as pd
 import pandas_market_calendars as mcal
 
-from logging_config import configure_logging
+from src.logging_config import configure_logging
 
 logger = configure_logging("run_live_loop")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PROJECT_ROOT / "src"
 
 # Matches the 5-minute candle interval predict.py/evaluate_predictions.py work with.
 POLL_INTERVAL_SECONDS = 5 * 60
@@ -50,12 +49,12 @@ def _market_is_open_now() -> bool:
     return schedule.iloc[0]["market_open"] <= now < schedule.iloc[0]["market_close"]
 
 
-def _run_step(script_name: str, *args: str) -> None:
-    command = [sys.executable, str(SRC_DIR / script_name), *args]
+def _run_step(module_name: str, *args: str) -> None:
+    command = [sys.executable, "-m", f"src.{module_name}", *args]
     logger.info("Running: %s", " ".join(command))
-    result = subprocess.run(command, cwd=SRC_DIR)
+    result = subprocess.run(command, cwd=PROJECT_ROOT)
     if result.returncode != 0:
-        logger.warning("%s exited with code %d", script_name, result.returncode)
+        logger.warning("%s exited with code %d", module_name, result.returncode)
 
 
 def _sleep_interruptibly(seconds: int) -> None:
@@ -72,8 +71,8 @@ def main() -> None:
     )
     while not _stop_requested:
         if _market_is_open_now():
-            _run_step("predict.py", "--mode", "live")
-            _run_step("evaluate_predictions.py", "--mode", "live")
+            _run_step("predict", "--mode", "live")
+            _run_step("evaluate_predictions", "--mode", "live")
         else:
             logger.info("Market closed; skipping this cycle.")
 
