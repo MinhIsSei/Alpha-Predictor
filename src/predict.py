@@ -9,6 +9,7 @@ import sqlite3
 from feature_utils import build_features
 from logging_config import configure_logging
 from net_utils import with_retries
+from prediction_rules import target_fits_session
 
 logger = configure_logging("predict")
 
@@ -171,7 +172,7 @@ if candle_start < session_open or candle_end > session_close:
     logger.info("Skipped: latest candle is outside this session.")
     raise SystemExit(0)
 
-if prediction_end > session_close:
+if not target_fits_session(prediction_end, session_close):
     logger.info(
         "Skipped: insufficient time remaining in session (prediction_end=%s, session_close=%s).",
         prediction_end, session_close,
