@@ -6,6 +6,8 @@ scikit-learn==1.7.2
 joblib==1.5.2
 pandas-market-calendars==5.4.0
 ta==0.11.0
+streamlit==1.64.0
+altair==6.3.0
 matplotlib==3.10.6
 seaborn==0.13.2
 ipykernel==6.31.0

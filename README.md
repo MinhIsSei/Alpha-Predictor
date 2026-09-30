@@ -36,6 +36,8 @@ src/
 ├── models.py                 # Model factories used by the harness above (Logistic Regression, gradient boosting)
 ├── compare_models.py         # CLI: compare model types on identical walk-forward folds
 ├── error_analysis.py         # CLI: confusion matrix, calibration, permutation importance per model
+├── dashboard_data.py         # Read-only data layer for the dashboard (no Streamlit import; unit-tested)
+├── dashboard.py              # Streamlit dashboard UI
 ├── predict.py                # Run replay/live predictions and store results
 ├── evaluate_predictions.py  # Match predictions with observed outcomes
 ├── run_live_loop.py         # Repeat predict.py/evaluate_predictions.py on a schedule
@@ -522,6 +524,42 @@ default) and reports, beyond a single accuracy number:
   at all. On the current snapshot, `rsi_14` ranks first for both models —
   the one feature both model types agree matters most.
 
+## Dashboard
+
+```bash
+python -m streamlit run src/dashboard.py
+```
+
+(`python -m streamlit`, not the bare `streamlit` command, so the repository
+root is on the import path — same reason as `python -m src.<module>` above.)
+
+A read-only view of the predictions database. It opens SQLite with
+`mode=ro`, so the "dashboard must only read" rule in
+[`docs/schema.md`](docs/schema.md) is enforced by SQLite rather than by
+convention. Without a local live database it falls back to the checked-in
+demo database, so it runs on a fresh clone.
+
+- **Filters** (one row, top): database (live / demo), mode, model version.
+- **Headline tiles**: prediction count; accuracy over *evaluated*
+  predictions only, always shown with its sample size ("4 of 8 correct");
+  pending predictions split into *awaiting target* (not due yet) vs. *not
+  evaluated* (target passed, no outcome stored — run
+  `evaluate_predictions.py`, or Yahoo no longer has the candle); and the
+  share of predictions that said Up. The dashboard warns when every
+  prediction in the selection is the same class — on the current live data
+  the model predicted Up 14 of 14 times, so its 50% accuracy there says more
+  about how often AAPL rose than about the model.
+- **Predictions over time**: model probability of Up per candle, outcome
+  shown by both color and marker shape, against the 0.5 decision threshold.
+  One slot per candle rather than a continuous time axis, since overnight
+  and weekend gaps would otherwise squash each session into one clump.
+- **Running accuracy** over evaluated predictions, against 50%.
+- **Model comparison**: the same walk-forward comparison as
+  `python -m src.compare_models`, cached until the processed table changes.
+  Skipped with an explanation if `data/processed/` hasn't been built.
+
+Every chart has a table view underneath. Times are New York time.
+
 ## Verification Status
 
 Verified through manual checks:
@@ -556,7 +594,6 @@ Not yet fully verified:
 ## Remaining Work
 
 - Improve artifact versioning and remove date-specific experiment assumptions.
-- Build a read-only dashboard (a demo database is ready at `data/demo/predictions_demo.sqlite`).
 - Add portable environment packaging and a demo.
 - Swap `models.build_gradient_boosting` for real XGBoost once this environment can reach PyPI, and re-run `compare_models.py`/`error_analysis.py` to see whether the comparison in "Modeling: Comparing Model Types" holds.
 - `train.py` still trains and saves only Logistic Regression on a single split. Decide whether to fold the walk-forward/model-comparison methodology into it (or replace it) now that `compare_models.py` suggests Logistic Regression remains the better choice — currently the two live side by side rather than one replacing the other.
