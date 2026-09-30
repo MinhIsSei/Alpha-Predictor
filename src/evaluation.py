@@ -57,23 +57,15 @@ def _build_model() -> Pipeline:
     ])
 
 
-def evaluate_fold(
-    df: pd.DataFrame,
-    feature_cols: list[str],
-    target_col: str,
-    train_dates,
-    test_dates,
-) -> dict | None:
-    """Fit a baseline and a model on one walk-forward fold and score both.
+def session_train_test_masks(df: pd.DataFrame, train_dates, test_dates):
+    """Return (train_mask, test_mask) boolean Series for one date split.
 
-    `df` must already carry a `target_time` column (see
-    `target_utils.build_target`): a training row is kept only if both its own
-    session and its target's session fall inside `train_dates`, so a label
-    that resolves into the test window never leaks into training.
-
-    Returns None for a degenerate fold (an empty split, or a training split
-    with only one class — `LogisticRegression` cannot fit that), so callers
-    can skip it rather than crash a multi-fold run.
+    A row counts toward training only if both its own session and its
+    target's session (`target_time`, from `target_utils.build_target`) fall
+    inside `train_dates` — otherwise its label resolves into the test window
+    and would leak the future into training. Shared by `evaluate_fold` and
+    any other caller that needs the identical split (e.g. error analysis on
+    a single held-out window), so the leakage rule is defined in one place.
     """
     train_dates_set = set(train_dates)
     test_dates_set = set(test_dates)
@@ -85,6 +77,34 @@ def evaluate_fold(
     )
     test_mask = session.isin(test_dates_set)
 
+    return train_mask, test_mask
+
+
+def evaluate_fold(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    train_dates,
+    test_dates,
+    model_factory=_build_model,
+) -> dict | None:
+    """Fit a baseline and a model on one walk-forward fold and score both.
+
+    `df` must already carry a `target_time` column (see
+    `target_utils.build_target`); see `session_train_test_masks` for how
+    that's used to keep a future label out of training.
+
+    `model_factory` returns an unfitted, scikit-learn-compatible estimator
+    (default: the scaled Logistic Regression pipeline used since Phase 2) —
+    pass a different factory (see `models.py`) to compare model types on the
+    exact same folds without duplicating the walk-forward machinery.
+
+    Returns None for a degenerate fold (an empty split, or a training split
+    with only one class), so callers can skip it rather than crash a
+    multi-fold run.
+    """
+    train_mask, test_mask = session_train_test_masks(df, train_dates, test_dates)
+
     train = df.loc[train_mask]
     test = df.loc[test_mask]
 
@@ -95,7 +115,7 @@ def evaluate_fold(
     X_test, y_test = test[feature_cols], test[target_col].astype(int)
 
     baseline = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
-    model = _build_model().fit(X_train, y_train)
+    model = model_factory().fit(X_train, y_train)
 
     baseline_pred = baseline.predict(X_test)
     model_pred = model.predict(X_test)
@@ -138,8 +158,12 @@ def run_walk_forward(
     train_sessions: int,
     test_sessions: int,
     step_sessions: int | None = None,
+    model_factory=_build_model,
 ) -> pd.DataFrame:
     """Run every walk-forward fold over `df`'s trading days and collect results.
+
+    `model_factory` is forwarded to `evaluate_fold` — see there for what it
+    must return.
 
     Returns one row per non-degenerate fold. An empty result means there
     weren't enough trading days, or every fold that fit was degenerate
@@ -151,7 +175,9 @@ def run_walk_forward(
     )
 
     results = [
-        evaluate_fold(df, feature_cols, target_col, train_dates, test_dates)
+        evaluate_fold(
+            df, feature_cols, target_col, train_dates, test_dates, model_factory
+        )
         for train_dates, test_dates in folds
     ]
     results = [result for result in results if result is not None]

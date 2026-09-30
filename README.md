@@ -30,6 +30,12 @@ src/
 ├── data_quality.py          # Shared raw-OHLCV quality checks
 ├── features.py              # Build the training dataset and targets
 ├── train.py                 # Train, evaluate, and save the model
+├── evaluation.py             # Walk-forward (rolling-origin) evaluation harness
+├── evaluate_walk_forward.py  # CLI: walk-forward evaluation of the AAPL model
+├── evaluate_cross_stock.py   # CLI: evaluate the AAPL model on other tickers
+├── models.py                 # Model factories used by the harness above (Logistic Regression, gradient boosting)
+├── compare_models.py         # CLI: compare model types on identical walk-forward folds
+├── error_analysis.py         # CLI: confusion matrix, calibration, permutation importance per model
 ├── predict.py                # Run replay/live predictions and store results
 ├── evaluate_predictions.py  # Match predictions with observed outcomes
 ├── run_live_loop.py         # Repeat predict.py/evaluate_predictions.py on a schedule
@@ -456,6 +462,66 @@ On the current snapshot, the AAPL model beat the same-ticker baseline on
 only 2 of 4 other tickers — evidence it has not learned a pattern that
 generalizes across symbols, consistent with the walk-forward result above.
 
+## Modeling: Comparing Model Types
+
+`models.py` defines model factories the walk-forward harness above can
+swap in and out, so a second model type is evaluated on the exact same
+folds as Logistic Regression rather than a separately-run, harder-to-compare
+experiment.
+
+**Gradient boosting, not XGBoost:** the second model is scikit-learn's
+`HistGradientBoostingClassifier`, not XGBoost. XGBoost is a separate PyPI
+package this environment could not install (no network access to PyPI at
+the time), so `HistGradientBoostingClassifier` — already available via the
+pinned `scikit-learn` dependency, and a comparably capable gradient-boosted
+-tree model — was used instead to keep every result below actually run and
+verified rather than speculative. Swapping in real XGBoost later only means
+adding it to `requirements.txt` and changing the one factory function in
+`models.py` that builds it; nothing else here depends on which library.
+
+### Model comparison
+
+```bash
+python -m src.compare_models
+```
+
+Evaluates every model in `models.MODEL_FACTORIES` on identical walk-forward
+folds (same train/test rows per fold, so any difference is attributable to
+the model). On the current snapshot (5 folds): Logistic Regression won 4 of
+5 folds head-to-head, with a higher mean accuracy (51.51% vs. 49.25%) and
+better calibration (see below). With roughly 500 training rows per fold and
+11 features, gradient boosting's extra capacity to fit interactions more
+often fits noise than signal here — a linear model generalizes better on
+data this size, which is a legitimate result, not a shortcoming of the
+comparison.
+
+### Feature importance and error analysis
+
+```bash
+python -m src.error_analysis
+```
+
+Fits each model once on a single held-out window (the last 4 sessions by
+default) and reports, beyond a single accuracy number:
+
+- A confusion matrix and full classification report.
+- **Accuracy by hour of day** — on the current snapshot, both models are
+  noticeably weaker in the last trading hour (15:00–16:00 ET) than mid-day.
+- **Calibration** — predicted probability vs. actual Up-rate, bucketed.
+  Logistic Regression is reasonably well calibrated (e.g. its lowest bucket
+  predicts 33.6% and actually resolves Up 34.7% of the time). Gradient
+  boosting is not (its lowest bucket predicts 27.1% but actually resolves
+  Up 53.3% of the time) — a concrete instance of what this README already
+  warns generally: **the probability the model reports is not its
+  accuracy**, and that gap can be worse for some models than others.
+- **Permutation importance**, computed on the held-out test set by
+  shuffling one feature at a time and measuring the accuracy drop — chosen
+  over Logistic Regression's own coefficients or a tree model's internal
+  gain because those two are on different, not-comparable scales, and
+  `HistGradientBoostingClassifier` does not expose a gain-based importance
+  at all. On the current snapshot, `rsi_14` ranks first for both models —
+  the one feature both model types agree matters most.
+
 ## Verification Status
 
 Verified through manual checks:
@@ -492,7 +558,8 @@ Not yet fully verified:
 - Improve artifact versioning and remove date-specific experiment assumptions.
 - Build a read-only dashboard (a demo database is ready at `data/demo/predictions_demo.sqlite`).
 - Add portable environment packaging and a demo.
-- Try a non-linear model (e.g. gradient boosting) and compare it using the same walk-forward evaluation, since the walk-forward and cross-stock results above suggest the current logistic model's edge over baseline is not robust.
+- Swap `models.build_gradient_boosting` for real XGBoost once this environment can reach PyPI, and re-run `compare_models.py`/`error_analysis.py` to see whether the comparison in "Modeling: Comparing Model Types" holds.
+- `train.py` still trains and saves only Logistic Regression on a single split. Decide whether to fold the walk-forward/model-comparison methodology into it (or replace it) now that `compare_models.py` suggests Logistic Regression remains the better choice — currently the two live side by side rather than one replacing the other.
 
 ## Data Source
 
