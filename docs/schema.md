@@ -1,9 +1,9 @@
 # Prediction Database Schema
 
 SQLite file: `data/predictions/predictions.sqlite` (created automatically by
-`src/predict.py` on first run). A small sample with real replay data is
-checked into `data/demo/predictions_demo.sqlite` for building/testing the
-dashboard without running the pipeline first.
+`src/predict.py` on first run). A copy of it, taken 2026-10-01 (14 replay and
+live predictions, all scored), is checked in as
+`data/demo/predictions_demo.sqlite` so the dashboard runs without the pipeline.
 
 Both tables are written only by the pipeline (`predict.py`,
 `evaluate_predictions.py`). The dashboard must only read from them.
