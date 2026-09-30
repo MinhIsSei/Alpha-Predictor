@@ -34,7 +34,12 @@ class TestValidatePriceQuality(unittest.TestCase):
 
     def test_non_positive_price_is_flagged(self):
         prices = make_prices(
-            ["2026-09-11 10:00"], [0], [1], [-1], [0.5], [1000],
+            ["2026-09-11 10:00"],
+            [0],
+            [1],
+            [-1],
+            [0.5],
+            [1000],
         )
 
         issues = validate_price_quality(prices)
@@ -42,7 +47,12 @@ class TestValidatePriceQuality(unittest.TestCase):
 
     def test_high_below_low_is_flagged(self):
         prices = make_prices(
-            ["2026-09-11 10:00"], [100], [98], [99], [98.5], [1000],
+            ["2026-09-11 10:00"],
+            [100],
+            [98],
+            [99],
+            [98.5],
+            [1000],
         )
 
         issues = validate_price_quality(prices)
@@ -50,7 +60,12 @@ class TestValidatePriceQuality(unittest.TestCase):
 
     def test_close_outside_range_is_flagged(self):
         prices = make_prices(
-            ["2026-09-11 10:00"], [100], [102], [99], [105], [1000],
+            ["2026-09-11 10:00"],
+            [100],
+            [102],
+            [99],
+            [105],
+            [1000],
         )
 
         issues = validate_price_quality(prices)
@@ -58,7 +73,12 @@ class TestValidatePriceQuality(unittest.TestCase):
 
     def test_open_outside_range_is_flagged(self):
         prices = make_prices(
-            ["2026-09-11 10:00"], [110], [102], [99], [100], [1000],
+            ["2026-09-11 10:00"],
+            [110],
+            [102],
+            [99],
+            [100],
+            [1000],
         )
 
         issues = validate_price_quality(prices)
@@ -66,7 +86,12 @@ class TestValidatePriceQuality(unittest.TestCase):
 
     def test_negative_volume_is_flagged(self):
         prices = make_prices(
-            ["2026-09-11 10:00"], [100], [102], [99], [100], [-5],
+            ["2026-09-11 10:00"],
+            [100],
+            [102],
+            [99],
+            [100],
+            [-5],
         )
 
         issues = validate_price_quality(prices)
@@ -75,7 +100,11 @@ class TestValidatePriceQuality(unittest.TestCase):
     def test_duplicate_timestamps_are_flagged(self):
         prices = make_prices(
             ["2026-09-11 10:00", "2026-09-11 10:00"],
-            [100, 100], [102, 102], [99, 99], [101, 101], [1000, 1000],
+            [100, 100],
+            [102, 102],
+            [99, 99],
+            [101, 101],
+            [1000, 1000],
         )
 
         issues = validate_price_quality(prices)
@@ -84,19 +113,25 @@ class TestValidatePriceQuality(unittest.TestCase):
     def test_short_interval_within_day_is_flagged(self):
         prices = make_prices(
             ["2026-09-11 10:00", "2026-09-11 10:02"],
-            [100, 100], [102, 102], [99, 99], [101, 101], [1000, 1000],
+            [100, 100],
+            [102, 102],
+            [99, 99],
+            [101, 101],
+            [1000, 1000],
         )
 
         issues = validate_price_quality(prices, expected_interval_minutes=5)
-        self.assertTrue(
-            any("shorter than 5 minutes" in issue for issue in issues)
-        )
+        self.assertTrue(any("shorter than 5 minutes" in issue for issue in issues))
 
     def test_session_boundary_gap_is_not_flagged(self):
         """An overnight gap between sessions is normal, not a data problem."""
         prices = make_prices(
             ["2026-09-10 15:55", "2026-09-11 09:30"],
-            [100, 105], [102, 107], [99, 104], [101, 106], [1000, 1100],
+            [100, 105],
+            [102, 107],
+            [99, 104],
+            [101, 106],
+            [1000, 1100],
         )
 
         issues = validate_price_quality(prices, expected_interval_minutes=5)
@@ -105,7 +140,11 @@ class TestValidatePriceQuality(unittest.TestCase):
     def test_interval_check_is_skipped_when_not_requested(self):
         prices = make_prices(
             ["2026-09-11 10:00", "2026-09-11 10:02"],
-            [100, 100], [102, 102], [99, 99], [101, 101], [1000, 1000],
+            [100, 100],
+            [102, 102],
+            [99, 99],
+            [101, 101],
+            [1000, 1000],
         )
 
         self.assertEqual(validate_price_quality(prices), [])

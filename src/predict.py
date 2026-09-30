@@ -1,12 +1,20 @@
+import argparse
+import sqlite3
 from contextlib import closing
 from pathlib import Path
-import pandas as pd
-import joblib
-import pandas_market_calendars as mcal
-import argparse
-import yfinance as yf
-import sqlite3
 
+import joblib
+import pandas as pd
+import pandas_market_calendars as mcal
+import yfinance as yf
+
+from src.config import (
+    INTERVAL_MINUTES,
+    MODEL_PATH,
+    MODEL_VERSION,
+    PREDICTIONS_DB_PATH,
+    RAW_PRICES_PATH,
+)
 from src.data_quality import validate_price_quality
 from src.feature_utils import build_features
 from src.logging_config import configure_logging
@@ -15,9 +23,6 @@ from src.prediction_rules import target_fits_session
 
 logger = configure_logging("predict")
 
-project_root = Path(__file__).resolve().parent.parent
-
-INTERVAL_MINUTES = 5
 MAX_DATA_AGE = pd.Timedelta(minutes=INTERVAL_MINUTES)
 
 
@@ -99,7 +104,8 @@ def insert_prediction(db_path: Path, record: dict) -> bool:
             )
         """)
 
-        cursor = connection.execute("""
+        cursor = connection.execute(
+            """
             INSERT INTO predictions (
                 ticker, interval, candle_start, candle_end, evaluation_time,
                 prediction_end, mode, model_version, horizon_minutes,
@@ -111,30 +117,30 @@ def insert_prediction(db_path: Path, record: dict) -> bool:
             ON CONFLICT (
                 ticker, interval, candle_start, mode, model_version, horizon_minutes
             ) DO NOTHING
-        """, (
-            record["ticker"],
-            record["interval"],
-            record["candle_start"],
-            record["candle_end"],
-            record["evaluation_time"],
-            record["prediction_end"],
-            record["mode"],
-            record["model_version"],
-            record["horizon_minutes"],
-            record["predicted_class"],
-            record["probability_up"],
-            record["reference_open"],
-            record["reference_high"],
-            record["reference_low"],
-            record["reference_close"],
-            record["reference_volume"],
-        ))
+        """,
+            (
+                record["ticker"],
+                record["interval"],
+                record["candle_start"],
+                record["candle_end"],
+                record["evaluation_time"],
+                record["prediction_end"],
+                record["mode"],
+                record["model_version"],
+                record["horizon_minutes"],
+                record["predicted_class"],
+                record["probability_up"],
+                record["reference_open"],
+                record["reference_high"],
+                record["reference_low"],
+                record["reference_close"],
+                record["reference_volume"],
+            ),
+        )
 
         inserted = cursor.rowcount == 1
 
-        total = connection.execute(
-            "SELECT COUNT(*) FROM predictions"
-        ).fetchone()[0]
+        total = connection.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
 
     if inserted:
         logger.info("Prediction saved: %s", db_path)
@@ -158,20 +164,22 @@ def load_prices(mode: str, as_of: str | None, artifact: dict) -> tuple[pd.DataFr
             else now.tz_convert("America/New_York")
         )
 
-        df = pd.read_parquet(
-            project_root / "data" / "raw" / "stock-trend_1mo.parquet"
-        )
+        df = pd.read_parquet(RAW_PRICES_PATH)
         prices = df.xs(ticker, axis=1, level="Ticker").copy().sort_index()
 
         return prices, now
 
     prices = with_retries(
-        lambda: yf.Ticker(ticker).history(
-            period="5d",
-            interval=artifact["interval"],
-            auto_adjust=True,
-            prepost=False,
-        ).sort_index(),
+        lambda: (
+            yf.Ticker(ticker)
+            .history(
+                period="5d",
+                interval=artifact["interval"],
+                auto_adjust=True,
+                prepost=False,
+            )
+            .sort_index()
+        ),
         description=f"yfinance history fetch for {ticker}",
     )
 
@@ -198,7 +206,18 @@ def main() -> None:
         parser.error("--as-of is only supported in replay mode.")
 
     # 1. Load the model and feature list
-    artifact = joblib.load(project_root / "models" / "aapl_logistic_v2.joblib")
+    artifact = joblib.load(MODEL_PATH)
+
+    # Artifacts trained since config.py record their own version; refuse to
+    # store predictions under a version label that doesn't match the model
+    # that actually made them. (Older artifacts predate the field.)
+    artifact_version = artifact.get("model_version", MODEL_VERSION)
+    if artifact_version != MODEL_VERSION:
+        raise ValueError(
+            f"{MODEL_PATH} contains model_version {artifact_version!r}, but config.py "
+            f"expects {MODEL_VERSION!r}. Retrain or update MODEL_VERSION."
+        )
+
     model = artifact["pipeline"]
     feature_cols = artifact["feature_cols"]
 
@@ -215,9 +234,7 @@ def main() -> None:
     logger.info("Mode: %s", args.mode)
     logger.info("Evaluation time: %s", now)
 
-    quality_issues = validate_price_quality(
-        prices, expected_interval_minutes=INTERVAL_MINUTES
-    )
+    quality_issues = validate_price_quality(prices, expected_interval_minutes=INTERVAL_MINUTES)
     if quality_issues:
         logger.warning("Skipped: raw price data failed quality checks: %s", quality_issues)
         raise SystemExit(0)
@@ -242,7 +259,9 @@ def main() -> None:
 
     calendar = mcal.get_calendar("NASDAQ")
     schedule = calendar.schedule(
-        start_date=session_date, end_date=session_date, tz="America/New_York",
+        start_date=session_date,
+        end_date=session_date,
+        tz="America/New_York",
     )
 
     if schedule.empty:
@@ -291,9 +310,7 @@ def main() -> None:
     logger.info("Model probability of Up: %.2f%%", probability_up * 100)
 
     # Store successful predictions in a local SQLite database.
-    prediction_dir = project_root / "data" / "predictions"
-    prediction_dir.mkdir(parents=True, exist_ok=True)
-    db_path = prediction_dir / "predictions.sqlite"
+    PREDICTIONS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # Raw OHLCV of the candle the prediction was based on, kept alongside the
     # prediction so it can be audited later without re-downloading from Yahoo
@@ -308,8 +325,7 @@ def main() -> None:
         "evaluation_time": evaluation_time.tz_convert("UTC").isoformat(),
         "prediction_end": prediction_end.tz_convert("UTC").isoformat(),
         "mode": args.mode,
-        # This identifier must change whenever a new model is released.
-        "model_version": "aapl_logistic_v2",
+        "model_version": MODEL_VERSION,
         "horizon_minutes": int(artifact["horizon_minutes"]),
         "predicted_class": prediction,
         "probability_up": float(probability_up),
@@ -320,7 +336,7 @@ def main() -> None:
         "reference_volume": float(reference_row["Volume"]),
     }
 
-    insert_prediction(db_path, record)
+    insert_prediction(PREDICTIONS_DB_PATH, record)
 
 
 if __name__ == "__main__":

@@ -6,16 +6,22 @@ access, a left join that keeps pending predictions visible, accuracy computed
 only over evaluated rows — live in one testable place rather than inside UI
 code.
 """
+
+import sqlite3
 from contextlib import closing
 from pathlib import Path
-import sqlite3
 
 import pandas as pd
 
 DISPLAY_TZ = "America/New_York"
 
 KEY_COLUMNS = [
-    "ticker", "interval", "candle_start", "mode", "model_version", "horizon_minutes",
+    "ticker",
+    "interval",
+    "candle_start",
+    "mode",
+    "model_version",
+    "horizon_minutes",
 ]
 
 STATUS_CORRECT = "Correct"
@@ -37,9 +43,12 @@ def connect_read_only(db_path: Path) -> sqlite3.Connection:
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
-    ).fetchone() is not None
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def load_predictions(db_path: Path, now: pd.Timestamp | None = None) -> pd.DataFrame:
@@ -135,10 +144,18 @@ def cumulative_accuracy(df: pd.DataFrame) -> pd.DataFrame:
     evaluated = evaluated.sort_values("candle_start").reset_index(drop=True)
 
     evaluated["n"] = evaluated.index + 1
-    evaluated["cumulative_accuracy"] = (
-        (evaluated["status"] == STATUS_CORRECT).cumsum() / evaluated["n"]
-    )
+    evaluated["cumulative_accuracy"] = (evaluated["status"] == STATUS_CORRECT).cumsum() / evaluated[
+        "n"
+    ]
     return evaluated[["n", "candle_start", "status", "cumulative_accuracy"]]
+
+
+def load_model_comparison_csv(path: Path) -> pd.DataFrame:
+    """Read a saved compare_models result (see `compare_models.py --output`)."""
+    results = pd.read_csv(path)
+    for col in ["train_start", "train_end", "test_start", "test_end"]:
+        results[col] = pd.to_datetime(results[col], utc=True).dt.tz_convert(DISPLAY_TZ)
+    return results
 
 
 def model_comparison_long(fold_results: pd.DataFrame) -> pd.DataFrame:
@@ -149,9 +166,9 @@ def model_comparison_long(fold_results: pd.DataFrame) -> pd.DataFrame:
     repeated per model — otherwise the chart would draw the same baseline
     bar twice.
     """
-    models = fold_results[["fold", "test_start", "test_end", "model_name", "model_accuracy"]].rename(
-        columns={"model_name": "series", "model_accuracy": "accuracy"}
-    )
+    models = fold_results[
+        ["fold", "test_start", "test_end", "model_name", "model_accuracy"]
+    ].rename(columns={"model_name": "series", "model_accuracy": "accuracy"})
     baseline = (
         fold_results.groupby("fold", as_index=False)
         .first()[["fold", "test_start", "test_end", "baseline_accuracy"]]

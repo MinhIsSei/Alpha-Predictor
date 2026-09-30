@@ -1,0 +1,6 @@
+# Notebooks (notebooks/) and developer tooling. Install alongside the
+# runtime set: pip install -r requirements.txt -r requirements-dev.txt
+matplotlib==3.10.6
+seaborn==0.13.2
+ipykernel==6.31.0
+ruff==0.16.9

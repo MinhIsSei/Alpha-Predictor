@@ -8,10 +8,12 @@ from src.models import MODEL_FACTORIES, build_gradient_boosting, build_logistic_
 
 def _toy_data():
     rng = np.random.default_rng(0)
-    X = pd.DataFrame({
-        "feature_1": rng.normal(size=40),
-        "feature_2": rng.normal(size=40),
-    })
+    X = pd.DataFrame(
+        {
+            "feature_1": rng.normal(size=40),
+            "feature_2": rng.normal(size=40),
+        }
+    )
     y = (X["feature_1"] > 0).astype(int)
     return X, y
 

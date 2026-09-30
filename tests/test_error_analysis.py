@@ -8,10 +8,15 @@ from src.models import build_logistic_regression
 
 class TestAccuracyByHour(unittest.TestCase):
     def test_splits_by_hour_and_computes_accuracy(self):
-        index = pd.DatetimeIndex([
-            "2026-09-11 10:00", "2026-09-11 10:05",
-            "2026-09-11 11:00", "2026-09-11 11:05", "2026-09-11 11:10",
-        ])
+        index = pd.DatetimeIndex(
+            [
+                "2026-09-11 10:00",
+                "2026-09-11 10:05",
+                "2026-09-11 11:00",
+                "2026-09-11 11:05",
+                "2026-09-11 11:10",
+            ]
+        )
         y_true = pd.Series([1, 0, 1, 1, 0], index=index)
         y_pred = [1, 1, 1, 0, 0]  # hour 10: 1/2 correct; hour 11: 2/3 correct
 
@@ -62,6 +67,7 @@ class TestCalibrationTable(unittest.TestCase):
 class TestFeatureImportance(unittest.TestCase):
     def test_ranks_informative_feature_above_pure_noise(self):
         import numpy as np
+
         rng = np.random.default_rng(0)
         n = 200
         informative = rng.normal(size=n)

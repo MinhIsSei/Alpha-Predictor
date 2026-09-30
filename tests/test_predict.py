@@ -50,8 +50,12 @@ class TestCheckSessionTiming(unittest.TestCase):
         evaluation_time = candle_end
 
         reason = check_session_timing(
-            candle_start, candle_end, prediction_end,
-            self.session_open, self.session_close, evaluation_time,
+            candle_start,
+            candle_end,
+            prediction_end,
+            self.session_open,
+            self.session_close,
+            evaluation_time,
         )
         self.assertIsNone(reason)
 
@@ -61,8 +65,12 @@ class TestCheckSessionTiming(unittest.TestCase):
         prediction_end = candle_end + pd.Timedelta(minutes=30)
 
         reason = check_session_timing(
-            candle_start, candle_end, prediction_end,
-            self.session_open, self.session_close, candle_end,
+            candle_start,
+            candle_end,
+            prediction_end,
+            self.session_open,
+            self.session_close,
+            candle_end,
         )
         self.assertEqual(reason, "latest candle is outside this session.")
 
@@ -72,8 +80,12 @@ class TestCheckSessionTiming(unittest.TestCase):
         prediction_end = candle_end + pd.Timedelta(minutes=30)
 
         reason = check_session_timing(
-            candle_start, candle_end, prediction_end,
-            self.session_open, self.session_close, candle_end,
+            candle_start,
+            candle_end,
+            prediction_end,
+            self.session_open,
+            self.session_close,
+            candle_end,
         )
         self.assertEqual(reason, "latest candle is outside this session.")
 
@@ -84,8 +96,12 @@ class TestCheckSessionTiming(unittest.TestCase):
         prediction_end = candle_end + pd.Timedelta(minutes=30)
 
         reason = check_session_timing(
-            candle_start, candle_end, prediction_end,
-            self.session_open, self.session_close, candle_end,
+            candle_start,
+            candle_end,
+            prediction_end,
+            self.session_open,
+            self.session_close,
+            candle_end,
         )
         self.assertIn("insufficient time remaining in session", reason)
 
@@ -97,8 +113,12 @@ class TestCheckSessionTiming(unittest.TestCase):
         evaluation_time = candle_end + pd.Timedelta(minutes=10)
 
         reason = check_session_timing(
-            candle_start, candle_end, prediction_end,
-            self.session_open, self.session_close, evaluation_time,
+            candle_start,
+            candle_end,
+            prediction_end,
+            self.session_open,
+            self.session_close,
+            evaluation_time,
         )
         self.assertIn("latest completed candle is stale", reason)
 
@@ -126,9 +146,7 @@ class TestInsertPrediction(unittest.TestCase):
 
     def _row_count(self, db_path):
         with closing(sqlite3.connect(db_path)) as connection:
-            return connection.execute(
-                "SELECT COUNT(*) FROM predictions"
-            ).fetchone()[0]
+            return connection.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
 
     def test_inserts_new_row(self):
         with temp_dir() as tmp_dir:

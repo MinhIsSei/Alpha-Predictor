@@ -29,20 +29,15 @@ def build_target(
     future_close = result["Close"].shift(-periods)
     future_time = timestamps.shift(-periods)
 
-    valid_target = (
-        (future_time - timestamps).eq(pd.Timedelta(minutes=horizon_minutes))
-        & future_time.dt.normalize().eq(timestamps.dt.normalize())
-    )
+    valid_target = (future_time - timestamps).eq(
+        pd.Timedelta(minutes=horizon_minutes)
+    ) & future_time.dt.normalize().eq(timestamps.dt.normalize())
 
     future_col = f"future_close_{horizon_minutes}m"
     target_col = f"target_up_{horizon_minutes}m"
 
     result[future_col] = future_close.where(valid_target)
-    result[target_col] = (
-        (future_close > result["Close"])
-        .astype("Int64")
-        .where(valid_target)
-    )
+    result[target_col] = (future_close > result["Close"]).astype("Int64").where(valid_target)
     result["target_time"] = future_time.where(valid_target)
 
     return result

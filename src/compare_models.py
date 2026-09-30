@@ -11,19 +11,24 @@ data. Each model is evaluated on identical fold boundaries (same train/test
 rows), so differences in the results are attributable to the model, not to
 different data.
 """
+
 import argparse
 from pathlib import Path
 
 import pandas as pd
 
-from src.evaluate_walk_forward import FEATURE_COLS, TARGET_COL
+from src.config import (
+    FEATURE_COLS,
+    PROCESSED_PATH,
+    TARGET_COL,
+    WALK_FORWARD_TEST_SESSIONS,
+    WALK_FORWARD_TRAIN_SESSIONS,
+)
 from src.evaluation import evaluate_fold, session_walk_forward_splits
 from src.logging_config import configure_logging
 from src.models import MODEL_FACTORIES
 
 logger = configure_logging("compare_models")
-
-project_root = Path(__file__).resolve().parent.parent
 
 
 def compare_models(
@@ -41,16 +46,12 @@ def compare_models(
     the caller can compare models within a fold or aggregate per model.
     """
     session_dates = df.index.normalize().unique()
-    folds = session_walk_forward_splits(
-        session_dates, train_sessions, test_sessions, step_sessions
-    )
+    folds = session_walk_forward_splits(session_dates, train_sessions, test_sessions, step_sessions)
 
     rows = []
     for fold_index, (train_dates, test_dates) in enumerate(folds):
         for model_name, factory in model_factories.items():
-            result = evaluate_fold(
-                df, feature_cols, target_col, train_dates, test_dates, factory
-            )
+            result = evaluate_fold(df, feature_cols, target_col, train_dates, test_dates, factory)
             if result is None:
                 continue
             result["fold"] = fold_index
@@ -64,38 +65,72 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare model types on identical walk-forward folds."
     )
-    parser.add_argument("--train-sessions", type=int, default=10)
-    parser.add_argument("--test-sessions", type=int, default=2)
+    parser.add_argument("--train-sessions", type=int, default=WALK_FORWARD_TRAIN_SESSIONS)
+    parser.add_argument("--test-sessions", type=int, default=WALK_FORWARD_TEST_SESSIONS)
     parser.add_argument("--step-sessions", type=int, default=None)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Also save the per-fold results as CSV, e.g. data/demo/model_comparison_demo.csv.",
+    )
     args = parser.parse_args()
 
-    file_path = project_root / "data" / "processed" / "aapl_training_1mo.parquet"
+    file_path = PROCESSED_PATH
     df = pd.read_parquet(file_path).sort_index()
 
     logger.info(
         "Loaded %d rows across %d trading sessions from %s",
-        len(df), df.index.normalize().nunique(), file_path,
+        len(df),
+        df.index.normalize().nunique(),
+        file_path,
     )
 
     results = compare_models(
-        df, FEATURE_COLS, TARGET_COL,
-        args.train_sessions, args.test_sessions, args.step_sessions,
+        df,
+        FEATURE_COLS,
+        TARGET_COL,
+        args.train_sessions,
+        args.test_sessions,
+        args.step_sessions,
     )
 
     if results.empty:
         logger.warning("No usable folds; try smaller --train-sessions/--test-sessions.")
         raise SystemExit(0)
 
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        results.to_csv(args.output, index=False)
+        logger.info("Saved per-fold results: %s", args.output)
+
     pd.set_option("display.width", 120)
 
     print(f"\n{results['fold'].nunique()} folds x {results['model_name'].nunique()} models:\n")
     print(
-        results[["fold", "model_name", "n_train", "n_test", "baseline_accuracy", "model_accuracy", "model_f1"]]
-        .round(4).to_string(index=False)
+        results[
+            [
+                "fold",
+                "model_name",
+                "n_train",
+                "n_test",
+                "baseline_accuracy",
+                "model_accuracy",
+                "model_f1",
+            ]
+        ]
+        .round(4)
+        .to_string(index=False)
     )
 
     per_model = results.groupby("model_name")[
-        ["baseline_accuracy", "model_accuracy", "model_precision", "model_recall", "model_f1", "model_roc_auc"]
+        [
+            "baseline_accuracy",
+            "model_accuracy",
+            "model_precision",
+            "model_recall",
+            "model_f1",
+            "model_roc_auc",
+        ]
     ].agg(["mean", "std"])
 
     print("\nPer-model summary across folds (mean / std):\n")

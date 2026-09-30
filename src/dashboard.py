@@ -1,35 +1,40 @@
 """Read-only Streamlit dashboard over the predictions database.
 
-Usage (from the repository root):
-    python -m streamlit run src/dashboard.py
-
-`python -m streamlit` rather than the bare `streamlit` executable, for the
-same reason as every other script here: `-m` puts the repository root on the
-import path, which `from src.dashboard_data import ...` needs.
+Launched through the repository-root entry point, which is also what
+Streamlit Community Cloud looks for:
+    streamlit run streamlit_app.py
 """
-from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
+from src.config import (
+    DEMO_DB_PATH,
+    DEMO_MODEL_COMPARISON_PATH,
+    FEATURE_COLS,
+    PREDICTIONS_DB_PATH,
+    PROCESSED_PATH,
+    TARGET_COL,
+    WALK_FORWARD_TEST_SESSIONS,
+    WALK_FORWARD_TRAIN_SESSIONS,
+)
 from src.dashboard_data import (
     STATUS_AWAITING,
     STATUS_CORRECT,
     STATUS_INCORRECT,
     STATUS_UNRESOLVED,
     cumulative_accuracy,
+    load_model_comparison_csv,
     load_predictions,
     model_comparison_long,
     summarize,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATABASES = {
-    "Live database": PROJECT_ROOT / "data" / "predictions" / "predictions.sqlite",
-    "Demo database": PROJECT_ROOT / "data" / "demo" / "predictions_demo.sqlite",
+    "Live database": PREDICTIONS_DB_PATH,
+    "Demo database": DEMO_DB_PATH,
 }
-PROCESSED_PATH = PROJECT_ROOT / "data" / "processed" / "aapl_training_1mo.parquet"
 
 # Validated with the dataviz skill's validate_palette.js against Streamlit's
 # own surfaces (#ffffff light, #0e1117 dark): all-pairs CVD and normal-vision
@@ -69,10 +74,15 @@ def cached_model_comparison(path: str, modified: float) -> pd.DataFrame:
     # `modified` is part of the cache key only: a re-run of features.py
     # changes the file's mtime, which invalidates this cached result.
     from src.compare_models import compare_models
-    from src.evaluate_walk_forward import FEATURE_COLS, TARGET_COL
 
     df = pd.read_parquet(path).sort_index()
-    return compare_models(df, FEATURE_COLS, TARGET_COL, train_sessions=10, test_sessions=2)
+    return compare_models(
+        df,
+        FEATURE_COLS,
+        TARGET_COL,
+        train_sessions=WALK_FORWARD_TRAIN_SESSIONS,
+        test_sessions=WALK_FORWARD_TEST_SESSIONS,
+    )
 
 
 def probability_chart(df: pd.DataFrame) -> alt.Chart:
@@ -98,38 +108,46 @@ def probability_chart(df: pd.DataFrame) -> alt.Chart:
         axis=alt.Axis(labelAngle=-45, labelOverlap="greedy"),
     )
 
-    threshold = alt.Chart(pd.DataFrame({"y": [0.5]})).mark_rule(
-        color=MUTED, strokeWidth=1
-    ).encode(y="y:Q")
-    threshold_label = alt.Chart(pd.DataFrame({"y": [0.5], "text": ["0.5 decision threshold"]})).mark_text(
-        align="left", dx=4, dy=-6, color=MUTED, fontSize=11
-    ).encode(y="y:Q", text="text:N", x=alt.value(0))
+    threshold = (
+        alt.Chart(pd.DataFrame({"y": [0.5]})).mark_rule(color=MUTED, strokeWidth=1).encode(y="y:Q")
+    )
+    threshold_label = (
+        alt.Chart(pd.DataFrame({"y": [0.5], "text": ["0.5 decision threshold"]}))
+        .mark_text(align="left", dx=4, dy=-6, color=MUTED, fontSize=11)
+        .encode(y="y:Q", text="text:N", x=alt.value(0))
+    )
 
-    points = alt.Chart(df).mark_point(size=90, filled=True, opacity=0.95).encode(
-        x=x,
-        y=alt.Y(
-            "probability_up:Q",
-            title="Model probability of Up",
-            scale=alt.Scale(domain=[0, 1]),
-            axis=alt.Axis(format="%"),
-        ),
-        color=color,
-        shape=shape,
-        tooltip=[
-            alt.Tooltip("candle_start:T", title="Candle start (NY)", format="%b %d %H:%M"),
-            alt.Tooltip("mode:N", title="Mode"),
-            alt.Tooltip("predicted_label:N", title="Predicted"),
-            alt.Tooltip("probability_up:Q", title="Probability of Up", format=".1%"),
-            alt.Tooltip("actual_label:N", title="Actual"),
-            alt.Tooltip("status:N", title="Outcome"),
-        ],
+    points = (
+        alt.Chart(df)
+        .mark_point(size=90, filled=True, opacity=0.95)
+        .encode(
+            x=x,
+            y=alt.Y(
+                "probability_up:Q",
+                title="Model probability of Up",
+                scale=alt.Scale(domain=[0, 1]),
+                axis=alt.Axis(format="%"),
+            ),
+            color=color,
+            shape=shape,
+            tooltip=[
+                alt.Tooltip("candle_start:T", title="Candle start (NY)", format="%b %d %H:%M"),
+                alt.Tooltip("mode:N", title="Mode"),
+                alt.Tooltip("predicted_label:N", title="Predicted"),
+                alt.Tooltip("probability_up:Q", title="Probability of Up", format=".1%"),
+                alt.Tooltip("actual_label:N", title="Actual"),
+                alt.Tooltip("status:N", title="Outcome"),
+            ],
+        )
     )
     return (threshold + threshold_label + points).properties(height=320)
 
 
 def running_accuracy_chart(running: pd.DataFrame, line_color: str) -> alt.Chart:
     base = alt.Chart(running).encode(
-        x=alt.X("n:Q", title="Evaluated predictions (in candle order)", axis=alt.Axis(tickMinStep=1)),
+        x=alt.X(
+            "n:Q", title="Evaluated predictions (in candle order)", axis=alt.Axis(tickMinStep=1)
+        ),
         y=alt.Y(
             "cumulative_accuracy:Q",
             title="Running accuracy",
@@ -137,66 +155,94 @@ def running_accuracy_chart(running: pd.DataFrame, line_color: str) -> alt.Chart:
             axis=alt.Axis(format="%"),
         ),
     )
-    reference = alt.Chart(pd.DataFrame({"y": [0.5]})).mark_rule(color=MUTED, strokeWidth=1).encode(y="y:Q")
-    reference_label = alt.Chart(pd.DataFrame({"y": [0.5], "text": ["50% · coin flip"]})).mark_text(
-        align="left", dx=4, dy=-6, color=MUTED, fontSize=11
-    ).encode(y="y:Q", text="text:N", x=alt.value(0))
+    reference = (
+        alt.Chart(pd.DataFrame({"y": [0.5]})).mark_rule(color=MUTED, strokeWidth=1).encode(y="y:Q")
+    )
+    reference_label = (
+        alt.Chart(pd.DataFrame({"y": [0.5], "text": ["50% · coin flip"]}))
+        .mark_text(align="left", dx=4, dy=-6, color=MUTED, fontSize=11)
+        .encode(y="y:Q", text="text:N", x=alt.value(0))
+    )
 
     hover = alt.selection_point(fields=["n"], nearest=True, on="pointerover", empty=False)
     line = base.mark_line(strokeWidth=2, color=line_color)
-    points = base.mark_point(filled=True, color=line_color).encode(
-        size=alt.condition(hover, alt.value(140), alt.value(70)),
-        tooltip=[
-            alt.Tooltip("n:Q", title="Evaluated #"),
-            alt.Tooltip("candle_start:T", title="Candle start (NY)", format="%b %d %H:%M"),
-            alt.Tooltip("status:N", title="This outcome"),
-            alt.Tooltip("cumulative_accuracy:Q", title="Running accuracy", format=".1%"),
-        ],
-    ).add_params(hover)
-    crosshair = base.mark_rule(color=MUTED).encode(
-        opacity=alt.condition(hover, alt.value(0.6), alt.value(0))
-    ).transform_filter(hover)
-    end_label = base.transform_window(
-        rank="rank()", sort=[alt.SortField("n", order="descending")]
-    ).transform_filter("datum.rank == 1").mark_text(
-        # Above-left of the last point: the last point sits on the plot's
-        # right edge, so a label to its right would be clipped.
-        align="right", dx=-6, dy=-12, fontSize=12, fontWeight="bold", color=INK[theme_mode()]
-    ).encode(text=alt.Text("cumulative_accuracy:Q", format=".0%"))
+    points = (
+        base.mark_point(filled=True, color=line_color)
+        .encode(
+            size=alt.condition(hover, alt.value(140), alt.value(70)),
+            tooltip=[
+                alt.Tooltip("n:Q", title="Evaluated #"),
+                alt.Tooltip("candle_start:T", title="Candle start (NY)", format="%b %d %H:%M"),
+                alt.Tooltip("status:N", title="This outcome"),
+                alt.Tooltip("cumulative_accuracy:Q", title="Running accuracy", format=".1%"),
+            ],
+        )
+        .add_params(hover)
+    )
+    crosshair = (
+        base.mark_rule(color=MUTED)
+        .encode(opacity=alt.condition(hover, alt.value(0.6), alt.value(0)))
+        .transform_filter(hover)
+    )
+    end_label = (
+        base.transform_window(rank="rank()", sort=[alt.SortField("n", order="descending")])
+        .transform_filter("datum.rank == 1")
+        .mark_text(
+            # Above-left of the last point: the last point sits on the plot's
+            # right edge, so a label to its right would be clipped.
+            align="right",
+            dx=-6,
+            dy=-12,
+            fontSize=12,
+            fontWeight="bold",
+            color=INK[theme_mode()],
+        )
+        .encode(text=alt.Text("cumulative_accuracy:Q", format=".0%"))
+    )
 
-    return (reference + reference_label + line + crosshair + points + end_label).properties(height=280)
+    return (reference + reference_label + line + crosshair + points + end_label).properties(
+        height=280
+    )
 
 
 def model_comparison_chart(long_df: pd.DataFrame, palette: list[str]) -> alt.Chart:
     labels = [SERIES_LABELS[s] for s in SERIES_ORDER]
     long_df = long_df.assign(series_label=long_df["series"].map(SERIES_LABELS))
 
-    return alt.Chart(long_df).mark_bar(
-        cornerRadiusTopLeft=4, cornerRadiusTopRight=4, width={"band": 0.75}
-    ).encode(
-        x=alt.X(
-            "fold_label:N",
-            title="Walk-forward test window",
-            sort=None,
-            scale=alt.Scale(paddingInner=0.35),
-            axis=alt.Axis(labelAngle=0, labelLimit=300),
-        ),
-        xOffset=alt.XOffset("series_label:N", sort=labels),
-        y=alt.Y("accuracy:Q", title="Test accuracy", scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%")),
-        # A fixed domain -> color mapping: each series keeps its color no
-        # matter which others are present, so a hue always means one model.
-        color=alt.Color(
-            "series_label:N",
-            title="Series",
-            scale=alt.Scale(domain=labels, range=palette),
-            legend=alt.Legend(orient="top", labelLimit=400),
-        ),
-        tooltip=[
-            alt.Tooltip("fold_label:N", title="Window"),
-            alt.Tooltip("series_label:N", title="Series"),
-            alt.Tooltip("accuracy:Q", title="Accuracy", format=".1%"),
-        ],
-    ).properties(height=320)
+    return (
+        alt.Chart(long_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, width={"band": 0.75})
+        .encode(
+            x=alt.X(
+                "fold_label:N",
+                title="Walk-forward test window",
+                sort=None,
+                scale=alt.Scale(paddingInner=0.35),
+                axis=alt.Axis(labelAngle=0, labelLimit=300),
+            ),
+            xOffset=alt.XOffset("series_label:N", sort=labels),
+            y=alt.Y(
+                "accuracy:Q",
+                title="Test accuracy",
+                scale=alt.Scale(domain=[0, 1]),
+                axis=alt.Axis(format="%"),
+            ),
+            # A fixed domain -> color mapping: each series keeps its color no
+            # matter which others are present, so a hue always means one model.
+            color=alt.Color(
+                "series_label:N",
+                title="Series",
+                scale=alt.Scale(domain=labels, range=palette),
+                legend=alt.Legend(orient="top", labelLimit=400),
+            ),
+            tooltip=[
+                alt.Tooltip("fold_label:N", title="Window"),
+                alt.Tooltip("series_label:N", title="Series"),
+                alt.Tooltip("accuracy:Q", title="Accuracy", format=".1%"),
+            ],
+        )
+        .properties(height=320)
+    )
 
 
 def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
@@ -205,8 +251,12 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
     tile_1, tile_2, tile_3, tile_4 = st.columns(4)
     tile_1.metric("Predictions", stats["n_predictions"], border=True)
     if stats["accuracy"] is None:
-        tile_2.metric("Accuracy (evaluated only)", "—", border=True,
-                      help="No prediction in this selection has an outcome yet.")
+        tile_2.metric(
+            "Accuracy (evaluated only)",
+            "—",
+            border=True,
+            help="No prediction in this selection has an outcome yet.",
+        )
     else:
         tile_2.metric(
             "Accuracy (evaluated only)",
@@ -216,7 +266,7 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
             delta_arrow="off",
             border=True,
             help="Computed only over predictions with a stored outcome. With a small "
-                 "sample, one new outcome can move this a lot.",
+            "sample, one new outcome can move this a lot.",
         )
     tile_3.metric(
         "Pending",
@@ -231,8 +281,8 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
         f"{stats['predicted_up_rate']:.0%}",
         border=True,
         help="Share of predictions that said Up. Compare it with how often the price "
-             "actually rose — a model that almost always says Up behaves like an "
-             "always-Up rule.",
+        "actually rose — a model that almost always says Up behaves like an "
+        "always-Up rule.",
     )
 
     latest = df.iloc[-1]
@@ -277,10 +327,19 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
 
     with st.expander("Table view — all predictions in this selection"):
         st.dataframe(
-            df[[
-                "candle_start", "mode", "model_version", "predicted_label", "probability_up",
-                "actual_label", "status", "reference_close", "target_close",
-            ]].rename(columns={"candle_start": "candle_start (NY)"}),
+            df[
+                [
+                    "candle_start",
+                    "mode",
+                    "model_version",
+                    "predicted_label",
+                    "probability_up",
+                    "actual_label",
+                    "status",
+                    "reference_close",
+                    "target_close",
+                ]
+            ].rename(columns={"candle_start": "candle_start (NY)"}),
             hide_index=True,
             column_config={
                 "probability_up": st.column_config.NumberColumn("probability_up", format="percent"),
@@ -292,28 +351,44 @@ def render_model_comparison_section() -> None:
     st.header("Model comparison (walk-forward)")
     st.caption(
         "Logistic Regression (the deployed model) and gradient boosting, each re-fit on "
-        "identical rolling windows of 10 sessions and tested on the next 2, against a "
-        "most-frequent-class baseline. Same computation as `python -m src.compare_models`."
+        f"identical rolling windows of {WALK_FORWARD_TRAIN_SESSIONS} sessions and tested on "
+        f"the next {WALK_FORWARD_TEST_SESSIONS}, against a most-frequent-class baseline. "
+        "Same computation as `python -m src.compare_models`."
     )
 
-    if not PROCESSED_PATH.is_file():
+    if PROCESSED_PATH.is_file():
+        results = cached_model_comparison(str(PROCESSED_PATH), PROCESSED_PATH.stat().st_mtime)
+    elif DEMO_MODEL_COMPARISON_PATH.is_file():
+        # data/processed/ is gitignored, so a fresh clone or a cloud deploy
+        # has no training table to re-fit on; show the checked-in snapshot.
+        results = load_model_comparison_csv(DEMO_MODEL_COMPARISON_PATH)
+        st.info(
+            "Showing a precomputed snapshot (`data/demo/model_comparison_demo.csv`). "
+            "Run `python -m src.ingest` and `python -m src.features` locally to recompute "
+            "it from fresh data."
+        )
+    else:
         st.info(
             "No processed training table found. Run `python -m src.ingest` and "
             "`python -m src.features` to create it, then reload."
         )
         return
 
-    results = cached_model_comparison(str(PROCESSED_PATH), PROCESSED_PATH.stat().st_mtime)
     if results.empty:
-        st.info("Not enough trading sessions in the processed table for a 10+2 walk-forward.")
+        st.info("Not enough trading sessions in the processed table for a walk-forward.")
         return
 
     long_df = model_comparison_long(results)
 
     pivot = results.pivot(index="fold", columns="model_name", values="model_accuracy")
     lr_wins = int((pivot["logistic_regression"] > pivot["gradient_boosting"]).sum())
-    beats_baseline = int((results.query("model_name == 'logistic_regression'")
-                          .eval("model_accuracy > baseline_accuracy")).sum())
+    beats_baseline = int(
+        (
+            results.query("model_name == 'logistic_regression'").eval(
+                "model_accuracy > baseline_accuracy"
+            )
+        ).sum()
+    )
     n_folds = len(pivot)
 
     tile_1, tile_2, tile_3 = st.columns(3)
@@ -321,7 +396,9 @@ def render_model_comparison_section() -> None:
         "Logistic Regression mean accuracy",
         f"{pivot['logistic_regression'].mean():.1%}",
         delta=f"±{pivot['logistic_regression'].std():.1%} across folds",
-        delta_color="off", delta_arrow="off", border=True,
+        delta_color="off",
+        delta_arrow="off",
+        border=True,
     )
     tile_2.metric("LR beats gradient boosting", f"{lr_wins} of {n_folds} folds", border=True)
     tile_3.metric("LR beats baseline", f"{beats_baseline} of {n_folds} folds", border=True)
@@ -334,9 +411,12 @@ def render_model_comparison_section() -> None:
     with st.expander("Table view — accuracy per fold"):
         table = long_df.pivot(index="fold_label", columns="series", values="accuracy")
         table = table[SERIES_ORDER].rename(columns=SERIES_LABELS)
-        st.dataframe(table, column_config={
-            col: st.column_config.NumberColumn(col, format="percent") for col in table.columns
-        })
+        st.dataframe(
+            table,
+            column_config={
+                col: st.column_config.NumberColumn(col, format="percent") for col in table.columns
+            },
+        )
 
 
 def main() -> None:

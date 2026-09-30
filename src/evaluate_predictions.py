@@ -1,18 +1,18 @@
-from contextlib import closing
-from pathlib import Path
-import sqlite3
-import pandas as pd
 import argparse
+import sqlite3
+from contextlib import closing
+
+import pandas as pd
 import yfinance as yf
 
+from src.config import PREDICTIONS_DB_PATH, RAW_PRICES_PATH
 from src.logging_config import configure_logging
 from src.net_utils import with_retries
 
 logger = configure_logging("evaluate_predictions")
 
-project_root = Path(__file__).resolve().parent.parent
-db_path = project_root / "data" / "predictions" / "predictions.sqlite"
-price_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
+db_path = PREDICTIONS_DB_PATH
+price_path = RAW_PRICES_PATH
 
 
 def compute_outcome(
@@ -60,8 +60,7 @@ def select_pending_predictions(connection: sqlite3.Connection, mode: str) -> pd.
     return pd.read_sql_query(query, connection, params=(mode,))
 
 
-def save_outcome(db_path, row, reference_close, target_close,
-                 actual_class, is_correct):
+def save_outcome(db_path, row, reference_close, target_close, actual_class, is_correct):
     """Save an outcome once without changing the original prediction."""
     with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute("""
@@ -88,7 +87,8 @@ def save_outcome(db_path, row, reference_close, target_close,
             )
         """)
 
-        cursor = connection.execute("""
+        cursor = connection.execute(
+            """
             INSERT INTO prediction_outcomes (
                 ticker,
                 interval,
@@ -111,28 +111,28 @@ def save_outcome(db_path, row, reference_close, target_close,
                 model_version,
                 horizon_minutes
             ) DO NOTHING
-        """, (
-            row["ticker"],
-            row["interval"],
-            row["candle_start"],
-            row["mode"],
-            row["model_version"],
-            int(row["horizon_minutes"]),
-            float(reference_close),
-            float(target_close),
-            int(actual_class),
-            int(is_correct),
-            pd.Timestamp.now(tz="UTC").isoformat(),
-        ))
+        """,
+            (
+                row["ticker"],
+                row["interval"],
+                row["candle_start"],
+                row["mode"],
+                row["model_version"],
+                int(row["horizon_minutes"]),
+                float(reference_close),
+                float(target_close),
+                int(actual_class),
+                int(is_correct),
+                pd.Timestamp.now(tz="UTC").isoformat(),
+            ),
+        )
 
         if cursor.rowcount == 1:
             logger.info("Outcome saved.")
         else:
             logger.info("Outcome already exists; no duplicate was saved.")
 
-        total = connection.execute(
-            "SELECT COUNT(*) FROM prediction_outcomes"
-        ).fetchone()[0]
+        total = connection.execute("SELECT COUNT(*) FROM prediction_outcomes").fetchone()[0]
 
         logger.info("Total stored outcomes: %d", total)
 
@@ -141,9 +141,7 @@ def main() -> None:
     if not db_path.is_file():
         raise FileNotFoundError("Prediction database does not exist.")
 
-    parser = argparse.ArgumentParser(
-        description="Evaluate pending replay or live predictions."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate pending replay or live predictions.")
     parser.add_argument("--mode", choices=["replay", "live"], default="replay")
     args = parser.parse_args()
 
@@ -162,9 +160,7 @@ def main() -> None:
     evaluation_time = pd.Timestamp.now(tz="UTC")
 
     if args.mode == "live":
-        target_times = pd.to_datetime(
-            predictions["prediction_end"], utc=True
-        )
+        target_times = pd.to_datetime(predictions["prediction_end"], utc=True)
         matured = target_times <= evaluation_time
 
         logger.info("Waiting for target close: %d", int((~matured).sum()))
@@ -174,16 +170,10 @@ def main() -> None:
             logger.info("No predictions are ready for evaluation.")
             raise SystemExit(0)
 
-    historical_prices = (
-        pd.read_parquet(price_path)
-        if args.mode == "replay"
-        else None
-    )
+    historical_prices = pd.read_parquet(price_path) if args.mode == "replay" else None
 
     # Download once per ticker and interval, not once per prediction.
-    for (ticker, interval), group in predictions.groupby(
-        ["ticker", "interval"]
-    ):
+    for (ticker, interval), group in predictions.groupby(["ticker", "interval"]):
         if interval != "5m":
             logger.warning("Skipped %s: unsupported candle interval.", ticker)
             continue
@@ -193,30 +183,27 @@ def main() -> None:
 
         else:
             # Request the dates needed by pending predictions.
-            first_time = pd.to_datetime(
-                group["candle_start"], utc=True
-            ).min()
-            last_time = pd.to_datetime(
-                group["prediction_end"], utc=True
-            ).max()
+            first_time = pd.to_datetime(group["candle_start"], utc=True).min()
+            last_time = pd.to_datetime(group["prediction_end"], utc=True).max()
 
-            start_date = first_time.tz_convert(
-                "America/New_York"
-            ).date()
+            start_date = first_time.tz_convert("America/New_York").date()
 
             end_date = (
-                last_time.tz_convert("America/New_York").normalize()
-                + pd.Timedelta(days=1)
+                last_time.tz_convert("America/New_York").normalize() + pd.Timedelta(days=1)
             ).date()
 
             try:
+                # Loop values are bound as defaults so the retried call can
+                # never pick up a later iteration's ticker or dates.
                 downloaded = with_retries(
-                    lambda: yf.Ticker(ticker).history(
-                        start=start_date.isoformat(),
-                        end=end_date.isoformat(),
-                        interval=interval,
-                        auto_adjust=True,
-                        prepost=False,
+                    lambda ticker=ticker, start=start_date, end=end_date, interval=interval: (
+                        yf.Ticker(ticker).history(
+                            start=start.isoformat(),
+                            end=end.isoformat(),
+                            interval=interval,
+                            auto_adjust=True,
+                            prepost=False,
+                        )
                     ),
                     description=f"yfinance history fetch for {ticker}",
                 )
@@ -243,22 +230,14 @@ def main() -> None:
 
         if args.mode == "live":
             # Exclude candles that had not closed at the evaluation cutoff.
-            close = close[
-                close.index + pd.Timedelta(minutes=5) <= evaluation_time
-            ]
+            close = close[close.index + pd.Timedelta(minutes=5) <= evaluation_time]
 
         for _, row in group.iterrows():
-            candle_start = pd.to_datetime(
-                row["candle_start"], utc=True
-            )
-            prediction_end = pd.to_datetime(
-                row["prediction_end"], utc=True
-            )
+            candle_start = pd.to_datetime(row["candle_start"], utc=True)
+            prediction_end = pd.to_datetime(row["prediction_end"], utc=True)
 
             # The target price belongs to the candle ending at prediction_end.
-            target_candle_start = (
-                prediction_end - pd.Timedelta(minutes=5)
-            )
+            target_candle_start = prediction_end - pd.Timedelta(minutes=5)
 
             required_times = [candle_start, target_candle_start]
 

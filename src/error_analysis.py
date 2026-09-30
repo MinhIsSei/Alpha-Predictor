@@ -22,32 +22,30 @@ A single fit (not walk-forward across many folds) is deliberate here: fold
 script's row-level error breakdown needs one concrete set of predictions to
 look at.
 """
+
 import argparse
-from pathlib import Path
 
 import pandas as pd
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import classification_report, confusion_matrix
 
-from src.evaluate_walk_forward import FEATURE_COLS, TARGET_COL
+from src.config import FEATURE_COLS, PROCESSED_PATH, TARGET_COL
 from src.evaluation import session_train_test_masks, session_walk_forward_splits
 from src.logging_config import configure_logging
 from src.models import MODEL_FACTORIES
 
 logger = configure_logging("error_analysis")
 
-project_root = Path(__file__).resolve().parent.parent
 
-
-def accuracy_by_hour(
-    index: pd.DatetimeIndex, y_true: pd.Series, y_pred
-) -> pd.DataFrame:
+def accuracy_by_hour(index: pd.DatetimeIndex, y_true: pd.Series, y_pred) -> pd.DataFrame:
     """Break down accuracy and class balance by hour of day (exchange time)."""
-    frame = pd.DataFrame({
-        "hour": index.hour,
-        "correct": (y_true.to_numpy() == y_pred),
-        "actual_up": y_true.to_numpy(),
-    })
+    frame = pd.DataFrame(
+        {
+            "hour": index.hour,
+            "correct": (y_true.to_numpy() == y_pred),
+            "actual_up": y_true.to_numpy(),
+        }
+    )
     grouped = frame.groupby("hour").agg(
         n=("correct", "size"),
         accuracy=("correct", "mean"),
@@ -69,11 +67,13 @@ def calibration_table(
     accuracy" -- this makes that gap visible instead of just asserting it.
     """
     buckets = pd.cut(y_proba, bins=bins, include_lowest=True)
-    frame = pd.DataFrame({
-        "bucket": buckets,
-        "y_proba": y_proba,
-        "y_true": y_true.to_numpy(),
-    })
+    frame = pd.DataFrame(
+        {
+            "bucket": buckets,
+            "y_proba": y_proba,
+            "y_true": y_true.to_numpy(),
+        }
+    )
     grouped = frame.groupby("bucket", observed=True).agg(
         n=("y_true", "size"),
         mean_predicted_prob=("y_proba", "mean"),
@@ -105,12 +105,14 @@ def feature_importance(
     contribution rather than an in-sample training statistic.
     """
     result = permutation_importance(
-        model, X_test, y_test,
-        n_repeats=n_repeats, random_state=random_state, scoring="accuracy",
+        model,
+        X_test,
+        y_test,
+        n_repeats=n_repeats,
+        random_state=random_state,
+        scoring="accuracy",
     )
-    return pd.Series(result.importances_mean, index=feature_cols).sort_values(
-        ascending=False
-    )
+    return pd.Series(result.importances_mean, index=feature_cols).sort_values(ascending=False)
 
 
 def main() -> None:
@@ -120,7 +122,7 @@ def main() -> None:
     parser.add_argument("--test-sessions", type=int, default=4)
     args = parser.parse_args()
 
-    file_path = project_root / "data" / "processed" / "aapl_training_1mo.parquet"
+    file_path = PROCESSED_PATH
     df = pd.read_parquet(file_path).sort_index()
 
     session_dates = df.index.normalize().unique()
@@ -132,7 +134,8 @@ def main() -> None:
     if not folds:
         logger.warning(
             "Not enough sessions (%d) for a %d-session held-out test window.",
-            len(session_dates), args.test_sessions,
+            len(session_dates),
+            args.test_sessions,
         )
         raise SystemExit(0)
 
@@ -142,8 +145,12 @@ def main() -> None:
 
     logger.info(
         "Train: %d rows (%s to %s). Test: %d rows (%s to %s).",
-        len(train), train_dates[0].date(), train_dates[-1].date(),
-        len(test), test_dates[0].date(), test_dates[-1].date(),
+        len(train),
+        train_dates[0].date(),
+        train_dates[-1].date(),
+        len(test),
+        test_dates[0].date(),
+        test_dates[-1].date(),
     )
 
     X_train, y_train = train[FEATURE_COLS], train[TARGET_COL].astype(int)
@@ -160,10 +167,16 @@ def main() -> None:
         print("\nConfusion matrix [rows: actual, columns: predicted] [0, 1]:")
         print(confusion_matrix(y_test, y_pred, labels=[0, 1]))
 
-        print(classification_report(
-            y_test, y_pred, labels=[0, 1],
-            target_names=["Not up", "Up"], digits=3, zero_division=0,
-        ))
+        print(
+            classification_report(
+                y_test,
+                y_pred,
+                labels=[0, 1],
+                target_names=["Not up", "Up"],
+                digits=3,
+                zero_division=0,
+            )
+        )
 
         print("Accuracy by hour (exchange time):")
         print(accuracy_by_hour(test.index, y_test, y_pred).round(4).to_string())

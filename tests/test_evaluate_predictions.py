@@ -5,8 +5,6 @@ import unittest
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-import pandas as pd
-
 from src.evaluate_predictions import (
     compute_outcome,
     prices_are_usable,
@@ -177,9 +175,7 @@ class TestSaveOutcomeAndSelectPending(unittest.TestCase):
             save_outcome(db_path, row, 100.0, 101.0, 1, True)
 
             with closing(sqlite3.connect(db_path)) as connection:
-                count = connection.execute(
-                    "SELECT COUNT(*) FROM prediction_outcomes"
-                ).fetchone()[0]
+                count = connection.execute("SELECT COUNT(*) FROM prediction_outcomes").fetchone()[0]
             self.assertEqual(count, 1)
 
 

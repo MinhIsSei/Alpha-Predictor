@@ -1,6 +1,7 @@
 import logging
 import time
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -26,9 +27,7 @@ def with_retries(
             return fn()
         except Exception as exc:
             last_error = exc
-            logger.warning(
-                "%s failed (attempt %d/%d): %s", description, attempt, attempts, exc
-            )
+            logger.warning("%s failed (attempt %d/%d): %s", description, attempt, attempts, exc)
             if attempt < attempts:
                 time.sleep(delay_seconds)
     raise last_error

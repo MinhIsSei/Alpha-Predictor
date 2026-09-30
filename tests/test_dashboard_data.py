@@ -14,6 +14,7 @@ from src.dashboard_data import (
     STATUS_UNRESOLVED,
     connect_read_only,
     cumulative_accuracy,
+    load_model_comparison_csv,
     load_predictions,
     model_comparison_long,
     summarize,
@@ -52,23 +53,47 @@ OUTCOMES_SCHEMA = """
 
 def prediction_row(candle_start, prediction_end, evaluation_time=None, predicted_class=1):
     return (
-        "AAPL", "5m", candle_start, candle_start, evaluation_time or candle_start,
-        prediction_end, "live", "aapl_logistic_v2", 30, predicted_class, 0.6,
-        100.0, 101.0, 99.0, 100.5, 1000.0,
+        "AAPL",
+        "5m",
+        candle_start,
+        candle_start,
+        evaluation_time or candle_start,
+        prediction_end,
+        "live",
+        "aapl_logistic_v2",
+        30,
+        predicted_class,
+        0.6,
+        100.0,
+        101.0,
+        99.0,
+        100.5,
+        1000.0,
     )
 
 
 def outcome_row(candle_start, is_correct):
     return (
-        "AAPL", "5m", candle_start, "live", "aapl_logistic_v2", 30,
-        100.5, 101.0, 1, is_correct, "2026-09-15T16:00:00+00:00",
+        "AAPL",
+        "5m",
+        candle_start,
+        "live",
+        "aapl_logistic_v2",
+        30,
+        100.5,
+        101.0,
+        1,
+        is_correct,
+        "2026-09-15T16:00:00+00:00",
     )
 
 
 def build_db(path, predictions, outcomes=None):
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute(PREDICTIONS_SCHEMA)
-        connection.executemany(f"INSERT INTO predictions VALUES ({','.join('?' * 16)})", predictions)
+        connection.executemany(
+            f"INSERT INTO predictions VALUES ({','.join('?' * 16)})", predictions
+        )
         if outcomes is not None:
             connection.execute(OUTCOMES_SCHEMA)
             connection.executemany(
@@ -80,7 +105,9 @@ class TestConnectReadOnly(unittest.TestCase):
     def test_writes_are_rejected(self):
         with temp_dir() as tmp:
             db_path = tmp / "p.sqlite"
-            build_db(db_path, [prediction_row("2026-09-15T15:00:00+00:00", "2026-09-15T15:35:00+00:00")])
+            build_db(
+                db_path, [prediction_row("2026-09-15T15:00:00+00:00", "2026-09-15T15:35:00+00:00")]
+            )
 
             with closing(connect_read_only(db_path)) as connection:
                 with self.assertRaises(sqlite3.OperationalError):
@@ -124,7 +151,9 @@ class TestLoadPredictions(unittest.TestCase):
     def test_works_before_outcomes_table_exists(self):
         with temp_dir() as tmp:
             db_path = tmp / "p.sqlite"
-            build_db(db_path, [prediction_row("2026-09-15T15:00:00+00:00", "2026-09-15T15:35:00+00:00")])
+            build_db(
+                db_path, [prediction_row("2026-09-15T15:00:00+00:00", "2026-09-15T15:35:00+00:00")]
+            )
 
             df = load_predictions(db_path, now=self.NOW)
 
@@ -134,12 +163,21 @@ class TestLoadPredictions(unittest.TestCase):
     def test_converts_utc_to_new_york_and_accepts_mixed_iso_formats(self):
         with temp_dir() as tmp:
             db_path = tmp / "p.sqlite"
-            build_db(db_path, [
-                prediction_row("2026-09-15T15:00:00+00:00", "2026-09-15T15:35:00+00:00",
-                               evaluation_time="2026-09-15T15:05:30.123456+00:00"),
-                prediction_row("2026-09-15T15:05:00+00:00", "2026-09-15T15:40:00+00:00",
-                               evaluation_time="2026-09-15T15:10:00+00:00"),
-            ])
+            build_db(
+                db_path,
+                [
+                    prediction_row(
+                        "2026-09-15T15:00:00+00:00",
+                        "2026-09-15T15:35:00+00:00",
+                        evaluation_time="2026-09-15T15:05:30.123456+00:00",
+                    ),
+                    prediction_row(
+                        "2026-09-15T15:05:00+00:00",
+                        "2026-09-15T15:40:00+00:00",
+                        evaluation_time="2026-09-15T15:10:00+00:00",
+                    ),
+                ],
+            )
 
             df = load_predictions(db_path, now=self.NOW)
 
@@ -157,10 +195,18 @@ class TestSummarize(unittest.TestCase):
         return pd.DataFrame({"status": statuses, "predicted_class": predicted})
 
     def test_accuracy_uses_only_evaluated_rows(self):
-        stats = summarize(self._df(
-            [STATUS_CORRECT, STATUS_INCORRECT, STATUS_CORRECT, STATUS_UNRESOLVED, STATUS_AWAITING],
-            [1, 1, 0, 1, 1],
-        ))
+        stats = summarize(
+            self._df(
+                [
+                    STATUS_CORRECT,
+                    STATUS_INCORRECT,
+                    STATUS_CORRECT,
+                    STATUS_UNRESOLVED,
+                    STATUS_AWAITING,
+                ],
+                [1, 1, 0, 1, 1],
+            )
+        )
         self.assertEqual(stats["n_evaluated"], 3)
         self.assertAlmostEqual(stats["accuracy"], 2 / 3)
         self.assertEqual(stats["n_unresolved"], 1)
@@ -174,28 +220,64 @@ class TestSummarize(unittest.TestCase):
 
 class TestCumulativeAccuracy(unittest.TestCase):
     def test_running_accuracy_skips_pending_rows(self):
-        df = pd.DataFrame({
-            "candle_start": pd.date_range("2026-09-15 11:00", periods=4, freq="5min"),
-            "status": [STATUS_CORRECT, STATUS_UNRESOLVED, STATUS_INCORRECT, STATUS_CORRECT],
-        })
+        df = pd.DataFrame(
+            {
+                "candle_start": pd.date_range("2026-09-15 11:00", periods=4, freq="5min"),
+                "status": [STATUS_CORRECT, STATUS_UNRESOLVED, STATUS_INCORRECT, STATUS_CORRECT],
+            }
+        )
         running = cumulative_accuracy(df)
         self.assertEqual(running["n"].tolist(), [1, 2, 3])
         self.assertEqual(running["cumulative_accuracy"].round(4).tolist(), [1.0, 0.5, 0.6667])
 
 
+class TestLoadModelComparisonCsv(unittest.TestCase):
+    def test_round_trips_compare_models_output(self):
+        fold_results = pd.DataFrame(
+            {
+                "train_start": [pd.Timestamp("2026-08-17", tz="America/New_York")],
+                "train_end": [pd.Timestamp("2026-08-28", tz="America/New_York")],
+                "test_start": [pd.Timestamp("2026-08-31", tz="America/New_York")],
+                "test_end": [pd.Timestamp("2026-09-01", tz="America/New_York")],
+                "fold": [0],
+                "model_name": ["logistic_regression"],
+                "model_accuracy": [0.46],
+                "baseline_accuracy": [0.45],
+            }
+        )
+        with temp_dir() as tmp:
+            path = tmp / "comparison.csv"
+            fold_results.to_csv(path, index=False)
+            loaded = load_model_comparison_csv(path)
+
+        self.assertEqual(loaded["test_start"].iloc[0], fold_results["test_start"].iloc[0])
+        self.assertEqual(str(loaded["test_start"].dt.tz), "America/New_York")
+
+    def test_checked_in_demo_snapshot_loads(self):
+        demo = DEMO_DB.parent / "model_comparison_demo.csv"
+        if not demo.is_file():
+            self.skipTest("Demo model comparison snapshot not present.")
+        loaded = load_model_comparison_csv(demo)
+        self.assertEqual(set(loaded["model_name"]), {"logistic_regression", "gradient_boosting"})
+
+
 class TestModelComparisonLong(unittest.TestCase):
     def test_baseline_appears_once_per_fold(self):
-        fold_results = pd.DataFrame({
-            "fold": [0, 0],
-            "test_start": [pd.Timestamp("2026-09-01")] * 2,
-            "test_end": [pd.Timestamp("2026-09-02")] * 2,
-            "model_name": ["logistic_regression", "gradient_boosting"],
-            "model_accuracy": [0.55, 0.50],
-            "baseline_accuracy": [0.48, 0.48],
-        })
+        fold_results = pd.DataFrame(
+            {
+                "fold": [0, 0],
+                "test_start": [pd.Timestamp("2026-09-01")] * 2,
+                "test_end": [pd.Timestamp("2026-09-02")] * 2,
+                "model_name": ["logistic_regression", "gradient_boosting"],
+                "model_accuracy": [0.55, 0.50],
+                "baseline_accuracy": [0.48, 0.48],
+            }
+        )
         long_df = model_comparison_long(fold_results)
 
-        self.assertEqual(sorted(long_df["series"]), ["baseline", "gradient_boosting", "logistic_regression"])
+        self.assertEqual(
+            sorted(long_df["series"]), ["baseline", "gradient_boosting", "logistic_regression"]
+        )
         self.assertAlmostEqual(long_df.set_index("series").loc["baseline", "accuracy"], 0.48)
 
 

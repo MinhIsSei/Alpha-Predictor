@@ -1,57 +1,73 @@
-import pandas as pd
+"""Build the AAPL training table (features + same-session target).
+
+Usage:
+    python -m src.features
+    python -m src.features --input <raw.parquet> --output <processed.parquet>
+
+Reads config.RAW_PRICES_PATH and writes config.PROCESSED_PATH by default; a
+table already at the output path is archived first, not overwritten.
+"""
+
+import argparse
 from pathlib import Path
 
+import pandas as pd
+
+from src.artifacts import archive_existing
+from src.config import (
+    FEATURE_COLS,
+    HORIZON_BARS,
+    HORIZON_MINUTES,
+    PROCESSED_PATH,
+    RAW_PRICES_PATH,
+    TARGET_COL,
+    TICKER,
+)
 from src.feature_utils import build_features
+from src.logging_config import configure_logging
 from src.target_utils import build_target
 
-project_root = Path(__file__).resolve().parent.parent
-file_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
+logger = configure_logging("features")
 
-df = pd.read_parquet(file_path)
 
-df_model = (
-    df.xs("AAPL", axis=1, level="Ticker")
-    .copy()
-    .sort_index()
-)
-df_model = build_features(df_model)
+def build_training_table(raw: pd.DataFrame, ticker: str = TICKER) -> pd.DataFrame:
+    """Features and target for one ticker, keeping only fully usable rows.
 
-# Horizon is 30 minutes = 6 bars at the 5-minute candle interval.
-df_model = build_target(df_model, horizon_minutes=30, periods=6)
+    A row is kept only if every feature, the target, and the target's
+    timestamp are present — the timestamp is what train.py and evaluation.py
+    use to keep a label that resolves in a later partition out of training.
+    """
+    prices = raw.xs(ticker, axis=1, level="Ticker").copy().sort_index()
+    prices = build_features(prices)
+    prices = build_target(prices, horizon_minutes=HORIZON_MINUTES, periods=HORIZON_BARS)
 
-feature_cols = [
-    "range_pct",
-    "body_pct",
-    "return_5m_pct",
-    "return_15m_pct",
-    "return_30m_pct",
-    "volatility_30m",
-    "volume_relative",
-    "rsi_14",
-    "macd_diff",
-    "bb_width_pct",
-    "atr_pct",
-]
+    columns = FEATURE_COLS + [TARGET_COL, "target_time"]
+    training_data = prices[columns].dropna(subset=columns).copy()
+    training_data[TARGET_COL] = training_data[TARGET_COL].astype(int)
+    return training_data
 
-target_col = "target_up_30m"
 
-#Only keep items that have sufficient characteristics and labels
-training_data = df_model[
-    feature_cols + [target_col, "target_time"]
-].dropna(subset=feature_cols + [target_col, "target_time"]).copy()
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build the AAPL training table.")
+    parser.add_argument("--input", type=Path, default=RAW_PRICES_PATH)
+    parser.add_argument("--output", type=Path, default=PROCESSED_PATH)
+    args = parser.parse_args()
 
-#Convert to a pure integer format so the ML library works
-training_data[target_col] = training_data[target_col].astype(int)
+    raw = pd.read_parquet(args.input)
+    training_data = build_training_table(raw)
 
-print("Number of rows before filter:", len(df_model))
-print("Number of rows for training:", len(training_data))
-print(training_data.head())
+    logger.info("Raw rows for %s: %d", TICKER, len(raw))
+    logger.info("Rows kept for training: %d", len(training_data))
+    logger.info("First rows:\n%s", training_data.head())
 
-#Save table
-processed_dir = project_root / "data" / "processed"
-processed_dir.mkdir(parents=True, exist_ok=True)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    archived = archive_existing(args.output)
+    if archived:
+        logger.info("Previous table archived to: %s", archived)
 
-output_path = processed_dir / "aapl_training_1mo.parquet"
-training_data.to_parquet(output_path, index=True)
+    training_data.to_parquet(args.output, index=True)
+    logger.info("Saved: %s", args.output)
 
-print(f"Saved: {output_path}")
+
+if __name__ == "__main__":
+    main()

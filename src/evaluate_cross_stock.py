@@ -16,20 +16,18 @@ This is a generalization diagnostic, not a claim that the model would be
 deployed on these tickers -- see reports/aapl_v2_experiment.md for the
 model's own (AAPL) evaluation and its limitations.
 """
-from pathlib import Path
 
 import joblib
 import pandas as pd
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score
 
+from src.config import INTERVAL_MINUTES, MODEL_PATH, RAW_PRICES_PATH
 from src.feature_utils import build_features
 from src.logging_config import configure_logging
 from src.target_utils import build_target
 
 logger = configure_logging("evaluate_cross_stock")
-
-project_root = Path(__file__).resolve().parent.parent
 
 OTHER_TICKERS = ["MSFT", "NVDA", "GOOGL", "AMZN"]
 
@@ -71,18 +69,16 @@ def evaluate_ticker(model, data: pd.DataFrame, target_col: str) -> dict:
 
 
 def main() -> None:
-    artifact = joblib.load(project_root / "models" / "aapl_logistic_v2.joblib")
+    artifact = joblib.load(MODEL_PATH)
     model = artifact["pipeline"]
     feature_cols = artifact["feature_cols"]
     horizon_minutes = artifact["horizon_minutes"]
-    periods = horizon_minutes // 5  # 5-minute candles
+    periods = horizon_minutes // INTERVAL_MINUTES
 
-    raw_path = project_root / "data" / "raw" / "stock-trend_1mo.parquet"
+    raw_path = RAW_PRICES_PATH
     raw_df = pd.read_parquet(raw_path)
 
-    logger.info(
-        "Evaluating AAPL model (%s) on: %s", artifact.get("ticker"), OTHER_TICKERS
-    )
+    logger.info("Evaluating AAPL model (%s) on: %s", artifact.get("ticker"), OTHER_TICKERS)
 
     results = {}
     for ticker in OTHER_TICKERS:
@@ -105,9 +101,7 @@ def main() -> None:
     print(summary.round(4).to_string())
 
     beats_baseline = (summary["model_accuracy"] > summary["baseline_accuracy"]).sum()
-    print(
-        f"\nModel beat the same-ticker baseline on {beats_baseline}/{len(summary)} tickers."
-    )
+    print(f"\nModel beat the same-ticker baseline on {beats_baseline}/{len(summary)} tickers.")
 
 
 if __name__ == "__main__":

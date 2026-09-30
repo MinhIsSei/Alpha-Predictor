@@ -16,13 +16,15 @@ def _make_synthetic_dataset(n_days: int, bars_per_day: int = 10, seed: int = 0):
         for bar in range(bars_per_day):
             timestamp = date + pd.Timedelta(minutes=5 * bar)
             target = int(rng.random() < 0.5)
-            rows.append({
-                "timestamp": timestamp,
-                "feature_1": target + rng.normal(scale=0.1),
-                "feature_2": rng.normal(),
-                "target_up_5m": target,
-                "target_time": timestamp,
-            })
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "feature_1": target + rng.normal(scale=0.1),
+                    "feature_2": rng.normal(),
+                    "target_up_5m": target,
+                    "target_time": timestamp,
+                }
+            )
 
     return pd.DataFrame(rows).set_index("timestamp")
 
@@ -32,8 +34,11 @@ class TestCompareModels(unittest.TestCase):
         df = _make_synthetic_dataset(n_days=10)
 
         results = compare_models(
-            df, ["feature_1", "feature_2"], "target_up_5m",
-            train_sessions=4, test_sessions=2,
+            df,
+            ["feature_1", "feature_2"],
+            "target_up_5m",
+            train_sessions=4,
+            test_sessions=2,
             model_factories={"logistic_regression": build_logistic_regression},
         )
 
@@ -44,8 +49,11 @@ class TestCompareModels(unittest.TestCase):
         df = _make_synthetic_dataset(n_days=10)
 
         results = compare_models(
-            df, ["feature_1", "feature_2"], "target_up_5m",
-            train_sessions=4, test_sessions=2,
+            df,
+            ["feature_1", "feature_2"],
+            "target_up_5m",
+            train_sessions=4,
+            test_sessions=2,
             model_factories={
                 "a": build_logistic_regression,
                 "b": build_logistic_regression,

@@ -4,6 +4,7 @@ Each factory takes no arguments and returns an unfitted, scikit-learn
 -compatible estimator, so `evaluation.evaluate_fold`/`run_walk_forward` can
 call it once per fold without knowing anything about the model inside.
 """
+
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -12,10 +13,12 @@ from sklearn.preprocessing import StandardScaler
 
 def build_logistic_regression() -> Pipeline:
     """The model used since train.py / Phase 2: scaled Logistic Regression."""
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("classifier", LogisticRegression(max_iter=1000)),
-    ])
+    return Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 def build_gradient_boosting() -> Pipeline:
@@ -33,14 +36,19 @@ def build_gradient_boosting() -> Pipeline:
     reasonable starting configuration, not a tuned one -- see
     reports/ for whether it's worth tuning further.
     """
-    return Pipeline([
-        ("classifier", HistGradientBoostingClassifier(
-            max_depth=3,
-            learning_rate=0.05,
-            max_iter=200,
-            random_state=0,
-        )),
-    ])
+    return Pipeline(
+        [
+            (
+                "classifier",
+                HistGradientBoostingClassifier(
+                    max_depth=3,
+                    learning_rate=0.05,
+                    max_iter=200,
+                    random_state=0,
+                ),
+            ),
+        ]
+    )
 
 
 MODEL_FACTORIES = {

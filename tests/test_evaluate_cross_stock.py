@@ -8,10 +8,12 @@ from src.evaluate_cross_stock import evaluate_ticker
 
 class TestEvaluateTicker(unittest.TestCase):
     def test_reports_accuracy_for_a_perfect_model(self):
-        data = pd.DataFrame({
-            "feature_1": [0, 0, 1, 1, 1, 0],
-            "target_up_30m": [0, 0, 1, 1, 1, 0],
-        })
+        data = pd.DataFrame(
+            {
+                "feature_1": [0, 0, 1, 1, 1, 0],
+                "target_up_30m": [0, 0, 1, 1, 1, 0],
+            }
+        )
         # A model that always predicts the (majority) class 0 is "perfect"
         # against this data's baseline, since the baseline predicts the same.
         model = DummyClassifier(strategy="most_frequent").fit(
@@ -25,10 +27,12 @@ class TestEvaluateTicker(unittest.TestCase):
         self.assertAlmostEqual(result["baseline_accuracy"], result["model_accuracy"])
 
     def test_up_rate_reflects_class_balance(self):
-        data = pd.DataFrame({
-            "feature_1": [0, 1, 1, 1],
-            "target_up_30m": [0, 1, 1, 1],
-        })
+        data = pd.DataFrame(
+            {
+                "feature_1": [0, 1, 1, 1],
+                "target_up_30m": [0, 1, 1, 1],
+            }
+        )
         model = DummyClassifier(strategy="most_frequent").fit(
             data[["feature_1"]], data["target_up_30m"]
         )

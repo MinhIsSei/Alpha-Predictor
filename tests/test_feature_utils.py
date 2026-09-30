@@ -15,10 +15,11 @@ def make_prices(timestamps, closes):
             "High": [value + 2 for value in closes],
             "Low": [value - 2 for value in closes],
             "Close": closes,
-            "Volume": [1000] * len(closes)
+            "Volume": [1000] * len(closes),
         },
         index=index,
     )
+
 
 class TestBuildFeatures(unittest.TestCase):
     def test_known_feature_values(self):
@@ -32,8 +33,7 @@ class TestBuildFeatures(unittest.TestCase):
             ],
             [100, 102, 104, 106],
         )
-        prices.iloc[0,
-                    prices.columns.get_loc("Open")] = 99
+        prices.iloc[0, prices.columns.get_loc("Open")] = 99
 
         result = build_features(prices)
         # First candle: Open = 99, High = 102, Low = 98, Close = 100.
@@ -60,20 +60,14 @@ class TestBuildFeatures(unittest.TestCase):
         )
 
         # First candle does not have past price to calculate return 5 mins.
-        self.assertTrue(
-            pd.isna(result["return_5m_pct"].iloc[0])
-        )
+        self.assertTrue(pd.isna(result["return_5m_pct"].iloc[0]))
 
         # There are only 4 candles, therefore not enough history to calculate return 30 mins.
-        self.assertTrue(
-            result["return_30m_pct"].isna().all()
-        )
+        self.assertTrue(result["return_30m_pct"].isna().all())
 
     def test_atr_is_missing_with_13_candles(self):
         """ATR must remain unavailable with fewer than 14 candles."""
-        timestamps = pd.date_range(
-            "2026-09-11 10:00", periods=13, freq="5min"
-        )
+        timestamps = pd.date_range("2026-09-11 10:00", periods=13, freq="5min")
         prices = make_prices(timestamps, [100.0] * 13)
 
         result = build_features(prices)
@@ -83,9 +77,7 @@ class TestBuildFeatures(unittest.TestCase):
 
     def test_atr_becomes_available_at_14_candles(self):
         """ATR must first become available on the 14th candle."""
-        timestamps = pd.date_range(
-            "2026-09-11 10:00", periods=14, freq="5min"
-        )
+        timestamps = pd.date_range("2026-09-11 10:00", periods=14, freq="5min")
         prices = make_prices(timestamps, [100.0] * 14)
 
         result = build_features(prices)
@@ -107,7 +99,7 @@ class TestBuildFeatures(unittest.TestCase):
                 "2026-09-10 15:50",
                 "2026-09-10 15:55",
                 "2026-09-11 09:30",
-                "2026-09-11 09:35", 
+                "2026-09-11 09:35",
             ],
             [100.0] * 6 + [110.0, 112.0],
         )
@@ -117,9 +109,7 @@ class TestBuildFeatures(unittest.TestCase):
         # The first candle of the new session has no intraday return.
         for minutes in (5, 15, 30):
             with self.subTest(minutes=minutes):
-                self.assertTrue(
-                    pd.isna(result[f"return_{minutes}m_pct"].iloc[6])
-                )
+                self.assertTrue(pd.isna(result[f"return_{minutes}m_pct"].iloc[6]))
 
         # The next candle has a valid five-minute return.
         self.assertAlmostEqual(
@@ -149,19 +139,14 @@ class TestBuildFeatures(unittest.TestCase):
 
         # A valid five-minute interval resumes after the gap
         self.assertAlmostEqual(
-            result["return_5m_pct"].iloc[3], 
+            result["return_5m_pct"].iloc[3],
             (108.0 / 106.0 - 1) * 100,
         )
 
     def test_future_candles_do_not_change_past_features(self):
         """Appending future candles must not change past features."""
-        timestamps = pd.date_range(
-            "2026-09-11 09:30", periods=60, freq="5min"
-        )
-        closes = [
-            100.0 + i * 0.1 + (i % 7 - 3) * 0.4
-            for i in range(60)
-        ]
+        timestamps = pd.date_range("2026-09-11 09:30", periods=60, freq="5min")
+        closes = [100.0 + i * 0.1 + (i % 7 - 3) * 0.4 for i in range(60)]
 
         # Add a large future price change after the comparision boundary
         closes[40:] = [value + 20.0 for value in closes[40:]]
@@ -179,16 +164,14 @@ class TestBuildFeatures(unittest.TestCase):
             "rsi_14",
             "macd_diff",
             "bb_width_pct",
-            "atr_pct"
+            "atr_pct",
         ]
 
         past_features = build_features(prices.iloc[:40].copy())
         full_features = build_features(prices)
 
         # Ensure every feature has values beyond its warm-up period
-        self.assertTrue(
-            past_features[feature_columns].iloc[-1].notna().all()
-        )
+        self.assertTrue(past_features[feature_columns].iloc[-1].notna().all())
 
         pd.testing.assert_frame_equal(
             past_features[feature_columns],

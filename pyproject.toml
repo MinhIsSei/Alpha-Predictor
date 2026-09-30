@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha-predictor"
+version = "0.5.0"
+description = "Predicts whether AAPL's close rises over the next 30 minutes from five-minute candles; an educational experiment."
+readme = "README.md"
+requires-python = ">=3.11"
+# Pinned versions live in requirements*.txt (the files CI and Streamlit
+# Community Cloud install from); read from there so they can't drift apart.
+dynamic = ["dependencies", "optional-dependencies"]
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+optional-dependencies.dev = { file = ["requirements-dev.txt"] }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, likely bugs, and pyupgrade.
+select = ["E", "F", "I", "B", "UP"]

@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def target_fits_session(
     prediction_end: pd.Timestamp,
     session_close: pd.Timestamp,

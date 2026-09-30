@@ -1,12 +1,13 @@
 """Run predict.py and evaluate_predictions.py in live mode on a repeating schedule.
 
 Usage:
-    python src/run_live_loop.py
+    python -m src.run_live_loop
 
 Stop safely with Ctrl+C (SIGINT) or `kill <pid>` (SIGTERM): the current
 cycle finishes, then the loop exits. There is no forced mid-cycle kill, so a
 prediction or outcome write is never left half-done.
 """
+
 import signal
 import subprocess
 import sys
@@ -41,9 +42,7 @@ signal.signal(signal.SIGTERM, _handle_stop_signal)
 def _market_is_open_now() -> bool:
     calendar = mcal.get_calendar("NASDAQ")
     now = pd.Timestamp.now(tz="America/New_York")
-    schedule = calendar.schedule(
-        start_date=now.date(), end_date=now.date(), tz="America/New_York"
-    )
+    schedule = calendar.schedule(start_date=now.date(), end_date=now.date(), tz="America/New_York")
     if schedule.empty:
         return False
     return schedule.iloc[0]["market_open"] <= now < schedule.iloc[0]["market_close"]

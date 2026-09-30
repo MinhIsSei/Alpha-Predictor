@@ -8,26 +8,15 @@ def build_features(prices: pd.DataFrame) -> pd.DataFrame:
     timestamps = result.index.to_series()
     trading_day = result.index.normalize()
 
-    result["range_pct"] = (
-        (result["High"] - result["Low"])
-        / result["Open"]
-        * 100
-    )
+    result["range_pct"] = (result["High"] - result["Low"]) / result["Open"] * 100
 
-    result["body_pct"] = (
-        (result["Close"] - result["Open"])
-        / result["Open"]
-        * 100
-    )
+    result["body_pct"] = (result["Close"] - result["Open"]) / result["Open"] * 100
 
     for periods, minutes in [(1, 5), (3, 15), (6, 30)]:
         valid_gap = timestamps.diff(periods=periods).eq(pd.Timedelta(minutes=minutes))
 
         result[f"return_{minutes}m_pct"] = (
-            result["Close"]
-            .pct_change(periods=periods, fill_method=None)
-            .mul(100)
-            .where(valid_gap)
+            result["Close"].pct_change(periods=periods, fill_method=None).mul(100).where(valid_gap)
         )
 
     # Rolling std-dev of 5-minute returns over the trailing 6 bars (~30 minutes).
@@ -56,9 +45,7 @@ def build_features(prices: pd.DataFrame) -> pd.DataFrame:
     result["macd_diff"] = macd.macd_diff()  # MACD line minus its signal line
 
     bb = ta.volatility.BollingerBands(close=result["Close"], window=20, window_dev=2)
-    result["bb_width_pct"] = (
-        (bb.bollinger_hband() - bb.bollinger_lband()) / result["Close"] * 100
-    )
+    result["bb_width_pct"] = (bb.bollinger_hband() - bb.bollinger_lband()) / result["Close"] * 100
 
     # Leave ATR unavailable until enough historical candles exist.
     atr_window = 14

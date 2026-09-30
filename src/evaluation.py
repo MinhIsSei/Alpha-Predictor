@@ -40,10 +40,8 @@ def session_walk_forward_splits(
     folds = []
     start = 0
     while start + train_sessions + test_sessions <= len(session_dates):
-        train_dates = session_dates[start: start + train_sessions]
-        test_dates = session_dates[
-            start + train_sessions: start + train_sessions + test_sessions
-        ]
+        train_dates = session_dates[start : start + train_sessions]
+        test_dates = session_dates[start + train_sessions : start + train_sessions + test_sessions]
         folds.append((train_dates, test_dates))
         start += step
 
@@ -51,10 +49,12 @@ def session_walk_forward_splits(
 
 
 def _build_model() -> Pipeline:
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("classifier", LogisticRegression(max_iter=1000)),
-    ])
+    return Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("classifier", LogisticRegression(max_iter=1000)),
+        ]
+    )
 
 
 def session_train_test_masks(df: pd.DataFrame, train_dates, test_dates):
@@ -71,9 +71,8 @@ def session_train_test_masks(df: pd.DataFrame, train_dates, test_dates):
     test_dates_set = set(test_dates)
     session = df.index.normalize()
 
-    train_mask = (
-        session.isin(train_dates_set)
-        & df["target_time"].dt.normalize().isin(train_dates_set)
+    train_mask = session.isin(train_dates_set) & df["target_time"].dt.normalize().isin(
+        train_dates_set
     )
     test_mask = session.isin(test_dates_set)
 
@@ -121,9 +120,7 @@ def evaluate_fold(
     model_pred = model.predict(X_test)
 
     up_index = list(model.classes_).index(1) if 1 in model.classes_ else None
-    model_proba = (
-        model.predict_proba(X_test)[:, up_index] if up_index is not None else None
-    )
+    model_proba = model.predict_proba(X_test)[:, up_index] if up_index is not None else None
 
     result = {
         "train_start": train_dates[0],
@@ -170,14 +167,10 @@ def run_walk_forward(
     (see `evaluate_fold`).
     """
     session_dates = df.index.normalize().unique()
-    folds = session_walk_forward_splits(
-        session_dates, train_sessions, test_sessions, step_sessions
-    )
+    folds = session_walk_forward_splits(session_dates, train_sessions, test_sessions, step_sessions)
 
     results = [
-        evaluate_fold(
-            df, feature_cols, target_col, train_dates, test_dates, model_factory
-        )
+        evaluate_fold(df, feature_cols, target_col, train_dates, test_dates, model_factory)
         for train_dates, test_dates in folds
     ]
     results = [result for result in results if result is not None]
@@ -188,7 +181,8 @@ def run_walk_forward(
 def summarize_folds(fold_results: pd.DataFrame) -> pd.DataFrame:
     """Aggregate mean/std across folds for every numeric metric column."""
     metric_cols = [
-        col for col in fold_results.columns
+        col
+        for col in fold_results.columns
         if col not in ("train_start", "train_end", "test_start", "test_end")
     ]
     return fold_results[metric_cols].agg(["mean", "std"])
