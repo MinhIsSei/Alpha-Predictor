@@ -224,11 +224,38 @@ class TestCumulativeAccuracy(unittest.TestCase):
             {
                 "candle_start": pd.date_range("2026-09-15 11:00", periods=4, freq="5min"),
                 "status": [STATUS_CORRECT, STATUS_UNRESOLVED, STATUS_INCORRECT, STATUS_CORRECT],
+                "actual_class": [1, None, 1, 0],
             }
         )
         running = cumulative_accuracy(df)
         self.assertEqual(running["n"].tolist(), [1, 2, 3])
         self.assertEqual(running["cumulative_accuracy"].round(4).tolist(), [1.0, 0.5, 0.6667])
+
+    def test_always_up_line_counts_how_often_the_price_rose(self):
+        # Predicted Up each time: correct when the price rose, wrong when not.
+        df = pd.DataFrame(
+            {
+                "candle_start": pd.date_range("2026-09-15 11:00", periods=4, freq="5min"),
+                "status": [STATUS_CORRECT, STATUS_INCORRECT, STATUS_CORRECT, STATUS_CORRECT],
+                "actual_class": [1, 0, 1, 1],
+            }
+        )
+        running = cumulative_accuracy(df)
+        self.assertEqual(
+            running["always_up_accuracy"].tolist(), running["cumulative_accuracy"].tolist()
+        )
+
+    def test_always_up_line_diverges_when_the_model_predicts_down(self):
+        df = pd.DataFrame(
+            {
+                "candle_start": pd.date_range("2026-09-15 11:00", periods=2, freq="5min"),
+                "status": [STATUS_CORRECT, STATUS_INCORRECT],  # predicted Not up, then Up
+                "actual_class": [0, 0],
+            }
+        )
+        running = cumulative_accuracy(df)
+        self.assertEqual(running["always_up_accuracy"].tolist(), [0.0, 0.0])
+        self.assertEqual(running["cumulative_accuracy"].tolist(), [1.0, 0.5])
 
 
 class TestLoadModelComparisonCsv(unittest.TestCase):

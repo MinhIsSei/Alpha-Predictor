@@ -139,6 +139,11 @@ def cumulative_accuracy(df: pd.DataFrame) -> pd.DataFrame:
     outcome — that volatility is the honest picture of a small sample, which
     is why the chart shows it next to the sample count rather than smoothing
     it away.
+
+    `always_up_accuracy` is the same running figure for a rule that says Up
+    for every candle: the share of evaluated candles whose price actually
+    rose. A model only adds value where it sits above that line, which a
+    fixed 50% reference cannot show when the market mostly rises.
     """
     evaluated = df[df["status"].isin([STATUS_CORRECT, STATUS_INCORRECT])].copy()
     evaluated = evaluated.sort_values("candle_start").reset_index(drop=True)
@@ -147,7 +152,8 @@ def cumulative_accuracy(df: pd.DataFrame) -> pd.DataFrame:
     evaluated["cumulative_accuracy"] = (evaluated["status"] == STATUS_CORRECT).cumsum() / evaluated[
         "n"
     ]
-    return evaluated[["n", "candle_start", "status", "cumulative_accuracy"]]
+    evaluated["always_up_accuracy"] = (evaluated["actual_class"] == 1).cumsum() / evaluated["n"]
+    return evaluated[["n", "candle_start", "status", "cumulative_accuracy", "always_up_accuracy"]]
 
 
 def load_model_comparison_csv(path: Path) -> pd.DataFrame:

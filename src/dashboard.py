@@ -143,16 +143,43 @@ def probability_chart(df: pd.DataFrame) -> alt.Chart:
     return (threshold + threshold_label + points).properties(height=320)
 
 
-def running_accuracy_chart(running: pd.DataFrame, line_color: str) -> alt.Chart:
-    base = alt.Chart(running).encode(
+def running_accuracy_chart(running: pd.DataFrame, palette: list[str]) -> alt.Chart:
+    model_color, always_up_color = palette[0], palette[1]
+    model_label, always_up_label = "Model", "Always predicting Up"
+
+    # One row per (prediction, series) so both lines share a legend.
+    long = running.melt(
+        id_vars=["n", "candle_start", "status"],
+        value_vars=["cumulative_accuracy", "always_up_accuracy"],
+        var_name="series",
+        value_name="accuracy",
+    )
+    long["series"] = long["series"].map(
+        {"cumulative_accuracy": model_label, "always_up_accuracy": always_up_label}
+    )
+
+    base = alt.Chart(long).encode(
         x=alt.X(
             "n:Q", title="Evaluated predictions (in candle order)", axis=alt.Axis(tickMinStep=1)
         ),
         y=alt.Y(
-            "cumulative_accuracy:Q",
+            "accuracy:Q",
             title="Running accuracy",
             scale=alt.Scale(domain=[0, 1]),
             axis=alt.Axis(format="%"),
+        ),
+        color=alt.Color(
+            "series:N",
+            title=None,
+            scale=alt.Scale(
+                domain=[model_label, always_up_label], range=[model_color, always_up_color]
+            ),
+            legend=alt.Legend(orient="top"),
+        ),
+        strokeDash=alt.StrokeDash(
+            "series:N",
+            scale=alt.Scale(domain=[model_label, always_up_label], range=[[1, 0], [6, 4]]),
+            legend=None,
         ),
     )
     reference = (
@@ -165,16 +192,17 @@ def running_accuracy_chart(running: pd.DataFrame, line_color: str) -> alt.Chart:
     )
 
     hover = alt.selection_point(fields=["n"], nearest=True, on="pointerover", empty=False)
-    line = base.mark_line(strokeWidth=2, color=line_color)
+    lines = base.mark_line(strokeWidth=2)
     points = (
-        base.mark_point(filled=True, color=line_color)
+        base.transform_filter(alt.datum.series == model_label)
+        .mark_point(filled=True)
         .encode(
             size=alt.condition(hover, alt.value(140), alt.value(70)),
             tooltip=[
                 alt.Tooltip("n:Q", title="Evaluated #"),
                 alt.Tooltip("candle_start:T", title="Candle start (NY)", format="%b %d %H:%M"),
                 alt.Tooltip("status:N", title="This outcome"),
-                alt.Tooltip("cumulative_accuracy:Q", title="Running accuracy", format=".1%"),
+                alt.Tooltip("accuracy:Q", title="Model running accuracy", format=".1%"),
             ],
         )
         .add_params(hover)
@@ -184,25 +212,41 @@ def running_accuracy_chart(running: pd.DataFrame, line_color: str) -> alt.Chart:
         .encode(opacity=alt.condition(hover, alt.value(0.6), alt.value(0)))
         .transform_filter(hover)
     )
-    end_label = (
-        base.transform_window(rank="rank()", sort=[alt.SortField("n", order="descending")])
-        .transform_filter("datum.rank == 1")
-        .mark_text(
-            # Above-left of the last point: the last point sits on the plot's
-            # right edge, so a label to its right would be clipped.
-            align="right",
-            dx=-6,
-            dy=-12,
-            fontSize=12,
-            fontWeight="bold",
-            color=INK[theme_mode()],
-        )
-        .encode(text=alt.Text("cumulative_accuracy:Q", format=".0%"))
-    )
 
-    return (reference + reference_label + line + crosshair + points + end_label).properties(
-        height=280
-    )
+    # Label each line's last value. When they end close together, the higher
+    # one is labelled above its point and the lower one below, so they never
+    # overlap. The last point sits on the plot's right edge, so labels go to
+    # its left rather than being clipped on the right.
+    last = running.iloc[-1]
+    model_above = last["cumulative_accuracy"] >= last["always_up_accuracy"]
+
+    def end_label(series: str, above: bool) -> alt.Chart:
+        return (
+            base.transform_filter(alt.datum.series == series)
+            .transform_window(rank="rank()", sort=[alt.SortField("n", order="descending")])
+            .transform_filter("datum.rank == 1")
+            .mark_text(
+                align="right",
+                dx=-6,
+                dy=-12 if above else 14,
+                fontSize=12,
+                fontWeight="bold",
+            )
+            .encode(
+                text=alt.Text("accuracy:Q", format=".0%"),
+                color=alt.value(INK[theme_mode()]),
+            )
+        )
+
+    return (
+        reference
+        + reference_label
+        + lines
+        + crosshair
+        + points
+        + end_label(model_label, model_above)
+        + end_label(always_up_label, not model_above)
+    ).properties(height=280)
 
 
 def model_comparison_chart(long_df: pd.DataFrame, palette: list[str]) -> alt.Chart:
@@ -245,8 +289,31 @@ def model_comparison_chart(long_df: pd.DataFrame, palette: list[str]) -> alt.Cha
     )
 
 
-def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
+def prediction_scope_caption(df: pd.DataFrame, db_name: str) -> str:
+    """What this section covers: source, candle dates (with year) and last scoring."""
+    first, last = df["candle_start"].min(), df["candle_start"].max()
+    if first.date() == last.date():
+        span = f"{first:%b %d, %Y}"
+    else:
+        span = f"{first:%b %d} – {last:%b %d, %Y}"
+    text = f"Source: {db_name.lower()} · candles {span} (New York time)"
+    scored = df["evaluated_at"].max()
+    if pd.notna(scored):
+        text += f" · last outcome recorded {scored:%b %d, %Y}"
+    if db_name == "Demo database":
+        text += (
+            " · a checked-in snapshot of past predictions, not a live feed. These figures "
+            "are separate from the walk-forward evaluation further down."
+        )
+    return text
+
+
+def render_predictions_section(df: pd.DataFrame, mode: str, db_name: str) -> None:
     stats = summarize(df)
+
+    source = "Demo" if db_name == "Demo database" else "Live"
+    st.header(f"{source} prediction history — {len(df)} records")
+    st.caption(prediction_scope_caption(df, db_name))
 
     tile_1, tile_2, tile_3, tile_4 = st.columns(4)
     tile_1.metric("Predictions", stats["n_predictions"], border=True)
@@ -287,8 +354,8 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
 
     latest = df.iloc[-1]
     st.caption(
-        f"Latest prediction: **{latest['predicted_label']}** for the candle starting "
-        f"{latest['candle_start']:%b %d, %H:%M} NY time — model probability of Up "
+        f"Latest prediction in this selection: **{latest['predicted_label']}** for the "
+        f"candle starting {latest['candle_start']:%b %d, %H:%M} NY time — model probability of Up "
         f"{latest['probability_up']:.1%} ({latest['status'].lower()}). "
         "The probability is the model's score, not its accuracy."
     )
@@ -317,11 +384,14 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
         st.info("At least two evaluated predictions are needed to draw running accuracy.")
     else:
         st.caption(
-            f"Over {len(running)} evaluated predictions. The line at 50% is a coin flip; "
-            "with a sample this small, expect large swings."
+            f"Over {len(running)} evaluated predictions. The 50% line is a coin flip. The "
+            "dashed line is the accuracy of saying Up for every candle in this selection: "
+            "the model adds value only where it runs above that line. Predictions five "
+            "minutes apart share most of their 30-minute window, so these records are not "
+            "independent observations, and with a sample this small expect large swings."
         )
         st.altair_chart(
-            running_accuracy_chart(running, CATEGORICAL[theme_mode()][0]),
+            running_accuracy_chart(running, CATEGORICAL[theme_mode()]),
             width="stretch",
         )
 
@@ -348,12 +418,15 @@ def render_predictions_section(df: pd.DataFrame, mode: str) -> None:
 
 
 def render_model_comparison_section() -> None:
-    st.header("Model comparison (walk-forward)")
+    st.header("Historical walk-forward evaluation")
     st.caption(
-        "Logistic Regression (the deployed model) and gradient boosting, each re-fit on "
-        f"identical rolling windows of {WALK_FORWARD_TRAIN_SESSIONS} sessions and tested on "
-        f"the next {WALK_FORWARD_TEST_SESSIONS}, against a most-frequent-class baseline. "
-        "Same computation as `python -m src.compare_models`."
+        "A different measurement from the prediction history above: models are re-fit on "
+        "past sessions and scored on later ones, rather than the deployed model's "
+        "forward predictions. Logistic Regression (the deployed model type) and gradient "
+        f"boosting are each re-fit on identical rolling windows of {WALK_FORWARD_TRAIN_SESSIONS} "
+        f"sessions and tested on the next {WALK_FORWARD_TEST_SESSIONS}, against a "
+        "most-frequent-class baseline. A training row is dropped if its 30-minute target "
+        "ends inside the test window, so no test-period label reaches training."
     )
 
     if PROCESSED_PATH.is_file():
@@ -363,9 +436,8 @@ def render_model_comparison_section() -> None:
         # has no training table to re-fit on; show the checked-in snapshot.
         results = load_model_comparison_csv(DEMO_MODEL_COMPARISON_PATH)
         st.info(
-            "Showing a precomputed snapshot (`data/demo/model_comparison_demo.csv`). "
-            "Run `python -m src.ingest` and `python -m src.features` locally to recompute "
-            "it from fresh data."
+            "Showing a precomputed historical snapshot; it is not recomputed in this "
+            "deployment. See Technical details below to recompute it."
         )
     else:
         st.info(
@@ -379,6 +451,10 @@ def render_model_comparison_section() -> None:
         return
 
     long_df = model_comparison_long(results)
+    st.caption(
+        f"Test windows span {results['test_start'].min():%b %d, %Y} – "
+        f"{results['test_end'].max():%b %d, %Y} (New York time)."
+    )
 
     pivot = results.pivot(index="fold", columns="model_name", values="model_accuracy")
     lr_wins = int((pivot["logistic_regression"] > pivot["gradient_boosting"]).sum())
@@ -416,6 +492,16 @@ def render_model_comparison_section() -> None:
             column_config={
                 col: st.column_config.NumberColumn(col, format="percent") for col in table.columns
             },
+        )
+
+    with st.expander("Technical details"):
+        st.markdown(
+            "- Recompute this comparison: `python -m src.ingest`, `python -m src.features`, "
+            "then `python -m src.compare_models`.\n"
+            "- Precomputed snapshot used when no training table is present: "
+            "`data/demo/model_comparison_demo.csv`.\n"
+            "- Prediction history comes from `data/predictions/predictions.sqlite` (live) or "
+            "`data/demo/predictions_demo.sqlite` (demo); see `docs/schema.md`."
         )
 
 
@@ -457,7 +543,7 @@ def main() -> None:
     if selection.empty:
         st.info("No predictions match this selection.")
     else:
-        render_predictions_section(selection, mode)
+        render_predictions_section(selection, mode, db_name)
 
     st.divider()
     render_model_comparison_section()
